@@ -1,0 +1,44 @@
+# ══════════════════════════════════════════════════════════
+# LiveKit Server Configuration
+# ══════════════════════════════════════════════════════════
+# Self-hosted LiveKit for ShalyaMitra's WebRTC transport.
+#
+# Participants:
+#   - theatre_display: Frontend web app (receives all tracks)
+#   - cam1_monitor:    Android phone / GoPro pointing at patient monitor
+#   - cam2_sentinel:   Android phone overhead (instrument tray)
+#   - cam3_surgeon:    Android phone on surgeon's headband / laparoscope
+#   - neckband_mic:    Bluetooth neckband (audio in)
+#   - neckband_spk:    Bluetooth neckband (audio out / TTS)
+#   - holoscan:        Holoscan runtime (receives video, sends overlays)
+#   - agent_orch:      Agent orchestrator (receives/sends audio + data)
+# ══════════════════════════════════════════════════════════
+
+port: 7880
+rtc:
+  port_range_start: 50000
+  port_range_end: 60000
+  use_external_ip: true
+  tcp_fallback_port: 7881
+
+# Room settings optimized for surgical theatre
+room:
+  auto_create: true
+  max_participants: 12
+  empty_timeout: 300       # 5 min grace before closing empty room
+
+# Turn server (for NAT traversal in hospital networks)
+turn:
+  enabled: true
+  tls_port: 7882
+  udp_port: 3478
+
+# Webhook for session lifecycle events
+webhook:
+  urls:
+    - "http://agent-orchestrator:9000/api/livekit/webhook"
+
+# Logging
+logging:
+  level: info
+  json: true

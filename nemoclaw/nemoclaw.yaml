@@ -1,0 +1,241 @@
+# ═══════════════════════════════════════════════════════
+# ShalyaMitra — NemoClaw Agent Configuration
+# ═══════════════════════════════════════════════════════
+#
+# This file defines how ShalyaMitra's 11 agents run inside
+# NVIDIA NemoClaw's secure sandbox environment.
+#
+# Deploy: curl -fsSL https://nvidia.com/nemoclaw.sh | bash
+# Then:   nemoclaw init --config ./nemoclaw.yaml
+# ═══════════════════════════════════════════════════════
+
+agent:
+  name: "ShalyaMitra Surgical Intelligence"
+  version: "1.0.0"
+  description: >
+    Enterprise surgical AI with 11 intelligence pillars providing
+    real-time intra-operative decision support: voice interaction,
+    vital monitoring, haemorrhage detection, instrument counting,
+    surgical phase recognition, literature search, drug management,
+    Marma anatomical alerts, expert consultation, cognitive bias
+    prevention, and automated operative reporting.
+
+# ── Inference Providers ──────────────────────────────────
+
+inference:
+  # LOCAL model — runs on GPU, patient data NEVER leaves the OR
+  local:
+    provider: "nim"
+    model: "nvidia/nemotron-3-super-120b"
+    endpoint: "http://localhost:8000/v1"
+    max_tokens: 2048
+    temperature: 0.3
+    use_for:
+      - patient_context      # Any query containing patient info
+      - drug_dosing           # Pharmacist agent calculations
+      - operative_notes       # Chronicler agent reports
+      - phi_containing        # Anything with detected PHI
+      - devils_advocate       # Safety challenges stay private
+
+  # CLOUD model — for general medical knowledge (no patient data)
+  cloud:
+    provider: "openrouter"
+    model: "google/gemini-2.0-flash-001"
+    endpoint: "https://openrouter.ai/api/v1"
+    max_tokens: 4096
+    temperature: 0.2
+    use_for:
+      - literature_search     # Scholar agent queries
+      - anatomy_reference     # Oracle agent general anatomy
+      - guideline_lookup      # Clinical protocol references
+      - second_opinion        # Consultant agent (anonymised)
+
+# ── Privacy Router Rules ─────────────────────────────────
+
+privacy:
+  # Keywords that trigger LOCAL routing (patient-sensitive)
+  sensitive_patterns:
+    - "patient"
+    - "MRN"
+    - "UHID"
+    - "aadhaar"
+    - "name"
+    - "age"
+    - "diagnosis"
+    - "history"
+    - "vitals"
+    - "blood pressure"
+    - "heart rate"
+    - "medication"
+    - "allergy"
+    - "comorbid"
+    - "operative note"
+    - "consent"
+
+  # Default: if no pattern matches, use cloud (cheaper)
+  default_route: "cloud"
+
+  # Force all traffic local during critical surgical phases
+  force_local_phases:
+    - "dissection"
+    - "critical_phase"
+    - "haemostasis"
+    - "closure"
+
+# ── Agent Sandboxes ──────────────────────────────────────
+
+sandboxes:
+  voice_agent:
+    name: "Nael (Voice Agent)"
+    pillar: 1
+    resources:
+      cpu: "1.0"
+      memory: "512Mi"
+    permissions:
+      microphone: true
+      speaker: true
+      network: ["localhost:50051"]    # Riva ASR/TTS
+    priority: "high"
+
+  monitor_agent:
+    name: "Monitor Agent"
+    pillar: 2
+    resources:
+      cpu: "0.5"
+      memory: "256Mi"
+    permissions:
+      camera: ["cam1"]
+      network: ["localhost:8100"]     # Holoscan
+    priority: "high"
+
+  haemorrhage_agent:
+    name: "Haemorrhage Agent"
+    pillar: 3
+    resources:
+      cpu: "1.0"
+      memory: "512Mi"
+    permissions:
+      camera: ["cam3"]
+      speaker: true                   # Direct critical alert path
+      network: ["localhost:8100"]
+    priority: "critical"
+    critical_path: true               # Bypass event queue <50ms
+
+  sentinel_agent:
+    name: "Sentinel Agent"
+    pillar: 4
+    resources:
+      cpu: "0.5"
+      memory: "512Mi"
+    permissions:
+      camera: ["cam2"]
+      network:
+        - "localhost:8100"            # Holoscan
+        - "api.deepdataspace.com"     # Grounding DINO
+    priority: "high"
+
+  eye_agent:
+    name: "Surgeon's Eye Agent"
+    pillar: 5
+    resources:
+      cpu: "0.5"
+      memory: "256Mi"
+    permissions:
+      camera: ["cam3"]
+      network: ["localhost:8100"]
+    priority: "normal"
+
+  scholar_agent:
+    name: "Scholar Agent"
+    pillar: 6
+    resources:
+      cpu: "0.5"
+      memory: "256Mi"
+    permissions:
+      network:
+        - "localhost:6333"            # Qdrant RAG
+        - "openrouter.ai"            # Cloud LLM (no patient data)
+    priority: "normal"
+
+  pharmacist_agent:
+    name: "Pharmacist Agent"
+    pillar: 7
+    resources:
+      cpu: "0.5"
+      memory: "256Mi"
+    permissions:
+      mcp_tools: ["drug_server"]
+      network: ["localhost:8000"]     # Local NIM only
+    priority: "high"
+
+  oracle_agent:
+    name: "Oracle Agent"
+    pillar: 8
+    resources:
+      cpu: "0.5"
+      memory: "256Mi"
+    permissions:
+      mcp_tools: ["marma_server"]
+    priority: "normal"
+
+  consultant_agent:
+    name: "Consultant Agent"
+    pillar: 9
+    resources:
+      cpu: "0.5"
+      memory: "256Mi"
+    permissions:
+      network: ["openrouter.ai"]     # Cloud (anonymised queries only)
+    priority: "low"
+
+  devils_advocate_agent:
+    name: "Devil's Advocate Agent"
+    pillar: 10
+    resources:
+      cpu: "0.25"
+      memory: "128Mi"
+    permissions:
+      network: []                     # NO network — local rules only
+    priority: "high"
+
+  chronicler_agent:
+    name: "Chronicler Agent"
+    pillar: 11
+    resources:
+      cpu: "0.5"
+      memory: "256Mi"
+    permissions:
+      filesystem_write: ["/app/reports/*"]
+      network: ["localhost:8000"]     # Local NIM for report generation
+    priority: "low"
+
+# ── MCP Tool Servers ─────────────────────────────────────
+
+mcp_servers:
+  marma_server:
+    command: "python3 /app/nemoclaw/mcp_servers/marma_server.py"
+    port: 3001
+    description: "107 Marma vital points from Sushruta Samhita"
+
+  drug_server:
+    command: "python3 /app/nemoclaw/mcp_servers/drug_server.py"
+    port: 3002
+    description: "16 surgical drugs, 12 interaction pairs, dose calculator"
+
+  safety_server:
+    command: "python3 /app/nemoclaw/mcp_servers/safety_server.py"
+    port: 3003
+    description: "PHI redaction + clinical guardrails"
+
+# ── Audit & Logging ──────────────────────────────────────
+
+audit:
+  enabled: true
+  log_path: "/app/logs/nemoclaw_audit.jsonl"
+  log_events:
+    - "llm_request"        # Every LLM call with routing decision
+    - "tool_call"          # Every MCP tool invocation
+    - "privacy_route"      # Every local/cloud routing decision
+    - "policy_violation"   # Any blocked action
+    - "agent_crash"        # Sandbox failure
+  retention_days: 90

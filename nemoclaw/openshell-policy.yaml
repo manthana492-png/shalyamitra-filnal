@@ -1,0 +1,202 @@
+# ═══════════════════════════════════════════════════════
+# ShalyaMitra — OpenShell Security Policy
+# ═══════════════════════════════════════════════════════
+#
+# NVIDIA OpenShell enforces these rules at the container level.
+# Every agent sandbox is constrained by these policies.
+# Violations are logged and blocked — no exceptions.
+#
+# Compliance targets: HIPAA, DISHA (India Digital Health),
+#                     CDSCO medical device guidelines
+# ═══════════════════════════════════════════════════════
+
+version: "1.0"
+
+# ── Network Policies ─────────────────────────────────────
+
+network:
+  # Trusted internal services (on GPU server)
+  trusted_internal:
+    - host: "localhost"
+      port: 8000
+      protocol: "http"
+      description: "NVIDIA NIM (Nemotron LLM)"
+    - host: "localhost"
+      port: 50051
+      protocol: "grpc"
+      description: "NVIDIA Riva (ASR + TTS)"
+    - host: "localhost"
+      port: 8100
+      protocol: "http"
+      description: "NVIDIA Holoscan (Surgical Vision)"
+    - host: "localhost"
+      port: 8001
+      protocol: "http"
+      description: "NVIDIA Triton (Model Serving)"
+    - host: "localhost"
+      port: 6333
+      protocol: "http"
+      description: "Qdrant (Vector DB)"
+    - host: "localhost"
+      port: 6379
+      protocol: "tcp"
+      description: "Redis (Event Bus)"
+    - host: "localhost"
+      port: 7880
+      protocol: "ws"
+      description: "LiveKit (WebRTC)"
+    - host: "localhost"
+      port: 8080
+      protocol: "http"
+      description: "Fish Speech TTS"
+    - host: "localhost"
+      port: 8090
+      protocol: "http"
+      description: "Piper TTS"
+
+  # Allowed external services (cloud fallback only)
+  trusted_external:
+    - host: "openrouter.ai"
+      port: 443
+      protocol: "https"
+      description: "Cloud LLM fallback (non-PHI queries only)"
+      condition: "no_phi_detected"
+    - host: "api.deepdataspace.com"
+      port: 443
+      protocol: "https"
+      description: "Grounding DINO (instrument detection)"
+      condition: "always"
+
+  # DEFAULT: block all other network traffic
+  default_policy: "deny"
+  log_blocked: true
+
+# ── Filesystem Policies ──────────────────────────────────
+
+filesystem:
+  read_allowed:
+    - path: "/app/knowledge/**"
+      description: "Marma DB, Drug DB, RAG corpus"
+    - path: "/app/alerts/pregenerated/**"
+      description: "Pre-recorded critical alert audio"
+    - path: "/app/config/**"
+      description: "Application configuration"
+    - path: "/app/nemoclaw/**"
+      description: "NemoClaw MCP servers and configs"
+
+  write_allowed:
+    - path: "/app/reports/**"
+      description: "Chronicler operative notes"
+      max_size_mb: 50
+    - path: "/app/logs/**"
+      description: "Audit trail and event logs"
+      max_size_mb: 500
+    - path: "/tmp/shalyamitra/**"
+      description: "Temporary processing (frames, audio chunks)"
+      auto_cleanup: true
+      ttl_minutes: 30
+
+  # Block sensitive system paths
+  denied:
+    - "/etc/shadow"
+    - "/etc/passwd"
+    - "/root/**"
+    - "/home/**"
+    - "/var/log/syslog"
+
+  default_policy: "deny"
+
+# ── Process Policies ─────────────────────────────────────
+
+process:
+  allowed:
+    - "python3"
+    - "uvicorn"
+    - "gunicorn"
+    - "node"              # For MCP servers if needed
+    - "redis-cli"         # For event bus health checks
+
+  denied:
+    - "ssh"
+    - "scp"
+    - "curl"              # Agents cannot make arbitrary HTTP calls
+    - "wget"
+    - "nc"                # No netcat
+    - "nmap"
+    - "apt"
+    - "pip"               # No installing packages at runtime
+    - "rm -rf"
+
+  default_policy: "deny"
+
+# ── Data Classification ──────────────────────────────────
+
+data_classification:
+  # PHI (Protected Health Information) — NEVER leaves local GPU
+  phi_categories:
+    - "patient_name"
+    - "date_of_birth"
+    - "aadhaar"
+    - "pan"
+    - "abha"
+    - "mrn"
+    - "uhid"
+    - "phone"
+    - "email"
+    - "address"
+    - "diagnosis"
+    - "operative_note"
+
+  # Non-PHI (can go to cloud for processing)
+  non_phi_categories:
+    - "anatomy_reference"
+    - "drug_general_info"
+    - "clinical_guideline"
+    - "surgical_technique"
+    - "literature_query"
+    - "marma_general"
+
+  # Enforcement
+  phi_enforcement:
+    block_cloud_if_phi: true
+    log_all_phi_access: true
+    redact_before_cloud: true
+    alert_on_phi_leak: true
+
+# ── Agent-Specific Overrides ─────────────────────────────
+
+agent_overrides:
+  haemorrhage_agent:
+    # Critical path — minimal overhead
+    skip_privacy_scan: false
+    priority_boost: true
+    direct_speaker_access: true
+    max_latency_ms: 50
+
+  devils_advocate_agent:
+    # Zero network — purely rule-based
+    network_override:
+      default_policy: "deny_all"
+    filesystem_override:
+      write_allowed: []  # Read-only agent
+
+  chronicler_agent:
+    # Needs to write reports
+    filesystem_override:
+      write_allowed:
+        - path: "/app/reports/**"
+          max_size_mb: 100
+
+# ── Compliance Metadata ──────────────────────────────────
+
+compliance:
+  standards:
+    - "HIPAA"
+    - "DISHA (India Digital Information Security in Healthcare Act)"
+    - "CDSCO Medical Device Guidelines"
+    - "IEC 62304 (Medical Device Software)"
+
+  data_residency: "in-country"
+  encryption_at_rest: true
+  encryption_in_transit: true
+  audit_retention_days: 2555   # 7 years (medical record retention)

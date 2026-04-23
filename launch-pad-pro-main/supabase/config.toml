@@ -1,0 +1,10 @@
+project_id = "hkrimacqtydvbleorklw"
+
+[functions.aria-realtime]
+verify_jwt = false
+
+[functions.mock-gpu]
+verify_jwt = false
+
+[functions.aria-tts]
+verify_jwt = false

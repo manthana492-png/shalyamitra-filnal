@@ -1,0 +1,65 @@
+# ──────────────────────────────────────────────────────────
+# ShalyaMitra — Git Ignore
+# ──────────────────────────────────────────────────────────
+
+# ── Environment / Secrets ─────────────────────────────────
+.env
+.env.local
+.env.*.local
+*.env
+
+# ── Python ────────────────────────────────────────────────
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+*.egg-info/
+dist/
+build/
+.eggs/
+*.egg
+.venv/
+venv/
+env/
+
+# ── Node / Frontend ───────────────────────────────────────
+node_modules/
+dist/
+.cache/
+*.tsbuildinfo
+
+# ── IDE ───────────────────────────────────────────────────
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+Thumbs.db
+
+# ── Docker ────────────────────────────────────────────────
+docker-compose.override.yml
+
+# ── Riva / NVIDIA ─────────────────────────────────────────
+riva_quickstart*/
+riva-data/
+*.nemo
+*.onnx
+*.plan
+*.engine
+
+# ── GPU Models ────────────────────────────────────────────
+*.pt
+*.pth
+*.bin
+*.safetensors
+models/
+
+# ── Logs ──────────────────────────────────────────────────
+*.log
+logs/
+
+# ── OS ────────────────────────────────────────────────────
+.DS_Store
+Thumbs.db
+desktop.ini

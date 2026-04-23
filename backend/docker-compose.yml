@@ -1,0 +1,55 @@
+# ──────────────────────────────────────────────────────────
+# ShalyaMitra Backend — Local Development Docker Compose
+# ──────────────────────────────────────────────────────────
+# Usage:  docker compose up -d
+# Docs:   http://localhost:8000/docs
+# Health: http://localhost:8000/healthz
+# ──────────────────────────────────────────────────────────
+
+services:
+  # ── Backend API ─────────────────────────────────────────
+  backend:
+    build: .
+    ports:
+      - "8000:8000"
+    environment:
+      - DEBUG=true
+      - GPU_PROVIDER=demo
+      - SUPABASE_URL=${SUPABASE_URL:-}
+      - SUPABASE_ANON_KEY=${SUPABASE_ANON_KEY:-}
+      - SUPABASE_JWT_SECRET=${SUPABASE_JWT_SECRET:-}
+      - REDIS_URL=redis://redis:6379/0
+      - QDRANT_URL=http://qdrant:6333
+      - LIVEKIT_URL=ws://livekit:7880
+    depends_on:
+      - redis
+      - qdrant
+    volumes:
+      - ./app:/app/app  # Hot reload
+    command: >
+      uvicorn app.main:app
+      --host 0.0.0.0 --port 8000
+      --reload --reload-dir /app/app
+
+  # ── Redis (session state + pub/sub) ─────────────────────
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+
+  # ── Qdrant (vector database for RAG) ────────────────────
+  qdrant:
+    image: qdrant/qdrant:latest
+    ports:
+      - "6333:6333"
+      - "6334:6334"
+    volumes:
+      - qdrant_data:/qdrant/storage
+    environment:
+      - QDRANT__LOG_LEVEL=INFO
+
+volumes:
+  redis_data:
+  qdrant_data:

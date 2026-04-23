@@ -1,0 +1,199 @@
+# ══════════════════════════════════════════════════════════
+# ShalyaMitra GPU Stack — Docker Compose
+# ══════════════════════════════════════════════════════════
+# Deployed on an H100 80GB instance for the duration of surgery.
+# Total VRAM budget: ~50-55GB (fits within 80GB with headroom).
+#
+# Start:  docker compose -f docker-compose.gpu.yml up -d
+# Stop:   docker compose -f docker-compose.gpu.yml down
+# ══════════════════════════════════════════════════════════
+
+services:
+  # ═══════════════════════════════════════════════════════
+  # 1. LiveKit Server — WebRTC SFU
+  #    Handles all audio/video transport between:
+  #    - Android phone cameras → vision pipelines
+  #    - Bluetooth neckband mic → ASR
+  #    - TTS audio → neckband speaker
+  #    - Overlay video → theatre display
+  # ═══════════════════════════════════════════════════════
+  livekit:
+    image: livekit/livekit-server:v1.8
+    ports:
+      - "7880:7880"   # HTTP + WS
+      - "7881:7881"   # RTC (UDP/TCP)
+      - "7882:7882"   # TURN/TLS
+    environment:
+      - LIVEKIT_KEYS=${LIVEKIT_API_KEY}:${LIVEKIT_API_SECRET}
+      - LIVEKIT_ENABLE_WEBSOCKET_RELAY=true
+    volumes:
+      - ./services/livekit/livekit.yaml:/livekit.yaml
+    command: --config /livekit.yaml
+    restart: unless-stopped
+
+  # ═══════════════════════════════════════════════════════
+  # 2. NVIDIA Riva — Speech AI (ASR + KWS + optional TTS)
+  #    VRAM: ~4-5GB
+  # ═══════════════════════════════════════════════════════
+  riva:
+    image: nvcr.io/nvidia/riva/riva-speech:2.17.0
+    ports:
+      - "50051:50051"  # gRPC
+    environment:
+      - RIVA_ASR_ENABLE=true
+      - RIVA_KWS_ENABLE=true
+      - RIVA_TTS_ENABLE=false  # Using Fish Speech instead
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+    volumes:
+      - riva_models:/data/models
+      - ./services/riva:/config
+    restart: unless-stopped
+
+  # ═══════════════════════════════════════════════════════
+  # 3. NVIDIA NIM — LLM Serving (Nemotron 3 Super)
+  #    VRAM: ~20-30GB
+  # ═══════════════════════════════════════════════════════
+  nim:
+    image: nvcr.io/nim/nvidia/nemotron-3-super-49b-v1:latest
+    ports:
+      - "8000:8000"
+    environment:
+      - NIM_CACHE_PATH=/opt/nim/.cache
+      - NGC_API_KEY=${NGC_API_KEY}
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+    volumes:
+      - nim_cache:/opt/nim/.cache
+    restart: unless-stopped
+
+  # ═══════════════════════════════════════════════════════
+  # 4. Fish Speech 1.5 — Conversational TTS
+  #    Multi-voice: Nael, Pharmacist, Oracle, Monitor
+  #    VRAM: ~3-4GB
+  # ═══════════════════════════════════════════════════════
+  fish-speech:
+    build: ./services/fish-speech
+    ports:
+      - "8080:8080"
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+    volumes:
+      - fish_voices:/app/voices
+    restart: unless-stopped
+
+  # ═══════════════════════════════════════════════════════
+  # 5. Piper TTS — Critical Alert Path (~50ms)
+  #    CPU-only, ultra-low latency
+  # ═══════════════════════════════════════════════════════
+  piper:
+    build: ./services/piper
+    ports:
+      - "8090:8090"
+    restart: unless-stopped
+
+  # ═══════════════════════════════════════════════════════
+  # 6. Holoscan Runtime — 3 Vision Pipelines
+  #    Runs Monitor Sentinel, The Sentinel, Surgeon's Eye
+  #    VRAM: ~12-15GB (shared across 3 graphs)
+  # ═══════════════════════════════════════════════════════
+  holoscan:
+    image: nvcr.io/nvidia/clara-holoscan/holoscan:v3.0.0-dgpu
+    ports:
+      - "9100:9100"   # Internal event bus
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+    volumes:
+      - ./services/holoscan:/app/pipelines
+      - holoscan_models:/app/models
+    environment:
+      - LIVEKIT_URL=ws://livekit:7880
+      - LIVEKIT_API_KEY=${LIVEKIT_API_KEY}
+      - LIVEKIT_API_SECRET=${LIVEKIT_API_SECRET}
+      - AGENT_BUS_URL=http://agent-orchestrator:9000
+    restart: unless-stopped
+
+  # ═══════════════════════════════════════════════════════
+  # 7. Agent Orchestrator — OpenClaw Multi-Agent Bus
+  #    Runs all intelligence agents, routes events
+  #    VRAM: ~0.5GB (thin coordinator)
+  # ═══════════════════════════════════════════════════════
+  agent-orchestrator:
+    build:
+      context: ../backend
+      dockerfile: Dockerfile
+    ports:
+      - "9000:9000"
+    environment:
+      - GPU_PROVIDER=local
+      - NIM_URL=http://nim:8000/v1
+      - RIVA_GRPC_URL=riva:50051
+      - FISH_SPEECH_URL=http://fish-speech:8080
+      - PIPER_URL=http://piper:8090
+      - QDRANT_URL=http://qdrant:6333
+      - REDIS_URL=redis://redis:6379/0
+      - LIVEKIT_URL=ws://livekit:7880
+      - LIVEKIT_API_KEY=${LIVEKIT_API_KEY}
+      - LIVEKIT_API_SECRET=${LIVEKIT_API_SECRET}
+      - OPENROUTER_API_KEY=${OPENROUTER_API_KEY}
+    depends_on:
+      - nim
+      - riva
+      - fish-speech
+      - piper
+      - holoscan
+      - qdrant
+      - redis
+    command: >
+      uvicorn app.main:app
+      --host 0.0.0.0 --port 9000
+    restart: unless-stopped
+
+  # ═══════════════════════════════════════════════════════
+  # 8. Qdrant — Vector Database (RAG)
+  #    CPU-only, stores Shalyatantra + medical embeddings
+  # ═══════════════════════════════════════════════════════
+  qdrant:
+    image: qdrant/qdrant:v1.13.2
+    ports:
+      - "6333:6333"
+    volumes:
+      - qdrant_data:/qdrant/storage
+
+  # ═══════════════════════════════════════════════════════
+  # 9. Redis — Session State + Event Pub/Sub
+  # ═══════════════════════════════════════════════════════
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+
+volumes:
+  riva_models:
+  nim_cache:
+  fish_voices:
+  holoscan_models:
+  qdrant_data:
+  redis_data:
