@@ -53,7 +53,10 @@ riva-data/
 *.pth
 *.bin
 *.safetensors
+# Local ML/weights directories named `models/` (not Python package)
 models/
+!backend/app/models/
+!backend/app/models/**
 
 # ── Logs ──────────────────────────────────────────────────
 *.log
