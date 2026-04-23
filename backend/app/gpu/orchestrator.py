@@ -15,22 +15,11 @@ from __future__ import annotations
 
 import asyncio
 from datetime import datetime, timezone
-from enum import Enum
 from typing import Optional
 from uuid import UUID
 
 from app.config import settings, GpuProvider
-from app.models.schemas import GpuSessionRequest, GpuSessionStatus
-
-
-class InstanceState(str, Enum):
-    provisioning = "provisioning"
-    deploying = "deploying"
-    ready = "ready"
-    active = "active"
-    terminating = "terminating"
-    terminated = "terminated"
-    error = "error"
+from app.models.schemas import GpuInstanceState, GpuSessionRequest, GpuSessionStatus
 
 
 # In-memory state (Redis in production)
@@ -49,14 +38,14 @@ async def provision_gpu_session(request: GpuSessionRequest) -> GpuSessionStatus:
     status = GpuSessionStatus(
         session_id=request.session_id,
         provider=request.provider,
-        status=InstanceState.provisioning,
+        status=GpuInstanceState.provisioning,
         started_at=datetime.now(timezone.utc),
     )
     _active_sessions[session_id] = status
 
     if settings.gpu_provider == GpuProvider.demo:
         # Simulate provisioning
-        status.status = InstanceState.ready
+        status.status = GpuInstanceState.ready
         status.endpoint_url = "ws://localhost:9000/ws/realtime"
         status.livekit_url = "ws://localhost:7880"
         status.estimated_cost_inr = 0.0
@@ -84,10 +73,10 @@ async def teardown_gpu_session(session_id: str) -> GpuSessionStatus:
     if not status:
         raise ValueError(f"No active GPU session: {session_id}")
 
-    status.status = InstanceState.terminating
+    status.status = GpuInstanceState.terminating
 
     if settings.gpu_provider == GpuProvider.demo:
-        status.status = InstanceState.terminated
+        status.status = GpuInstanceState.terminated
         return status
 
     # TODO: Implement real teardown
@@ -96,7 +85,7 @@ async def teardown_gpu_session(session_id: str) -> GpuSessionStatus:
     # 3. Terminate the cloud instance
     # 4. Calculate final cost
 
-    status.status = InstanceState.terminated
+    status.status = GpuInstanceState.terminated
     return status
 
 

@@ -82,17 +82,11 @@ services:
   #    Multi-voice: Nael, Pharmacist, Oracle, Monitor
   #    VRAM: ~3-4GB
   # ═══════════════════════════════════════════════════════
+  # Stub uses CPU; replace image with real Fish Speech + GPU when enabling local TTS
   fish-speech:
     build: ./services/fish-speech
     ports:
       - "8080:8080"
-    deploy:
-      resources:
-        reservations:
-          devices:
-            - driver: nvidia
-              count: 1
-              capabilities: [gpu]
     volumes:
       - fish_voices:/app/voices
     restart: unless-stopped
