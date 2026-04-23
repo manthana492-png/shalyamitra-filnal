@@ -4,7 +4,10 @@
 # Deployed on an H100 80GB instance for the duration of surgery.
 # Total VRAM budget: ~50-55GB (fits within 80GB with headroom).
 #
-# Start:  docker compose -f docker-compose.gpu.yml up -d
+# Start (default — Riva, LiveKit, Holoscan, etc.; NO local Nemotron):
+#   docker compose -f docker-compose.gpu.yml up -d --build
+# Optional: local NIM on GPU (large image + NGC; only if you need offline LLM):
+#   docker compose -f docker-compose.gpu.yml --profile local-nim up -d
 # Stop:   docker compose -f docker-compose.gpu.yml down
 # ══════════════════════════════════════════════════════════
 
@@ -56,10 +59,13 @@ services:
     restart: unless-stopped
 
   # ═══════════════════════════════════════════════════════
-  # 3. NVIDIA NIM — LLM Serving (Nemotron 3 Super)
-  #    VRAM: ~20-30GB
+  # 3. NVIDIA NIM — Local LLM (Nemotron) — NOT used with cloud NIM API
+  #    Enable only with: --profile local-nim
+  #    Default stack uses NIM via NVIDIA_API_KEY (integrate.api.nvidia.com).
   # ═══════════════════════════════════════════════════════
   nim:
+    profiles:
+      - local-nim
     image: nvcr.io/nim/nvidia/nemotron-3-super-49b-v1:latest
     ports:
       - "8000:8000"
@@ -140,7 +146,10 @@ services:
       - "9000:9000"
     environment:
       - GPU_PROVIDER=local
-      - NIM_URL=http://nim:8000/v1
+      # Cloud NIM (default). For local NIM container, add profile local-nim and set
+      # NVIDIA_NIM_BASE_URL=http://nim:8000/v1
+      - NVIDIA_NIM_BASE_URL=${NVIDIA_NIM_BASE_URL:-https://integrate.api.nvidia.com/v1}
+      - NVIDIA_API_KEY=${NVIDIA_API_KEY}
       - RIVA_GRPC_URL=riva:50051
       - FISH_SPEECH_URL=http://fish-speech:8080
       - PIPER_URL=http://piper:8090
@@ -151,7 +160,6 @@ services:
       - LIVEKIT_API_SECRET=${LIVEKIT_API_SECRET}
       - OPENROUTER_API_KEY=${OPENROUTER_API_KEY}
     depends_on:
-      - nim
       - riva
       - fish-speech
       - piper
