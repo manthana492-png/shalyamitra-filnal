@@ -4,8 +4,10 @@
 # Deployed on an H100 80GB instance for the duration of surgery.
 # Total VRAM budget: ~50-55GB (fits within 80GB with headroom).
 #
-# Start (default — Riva, LiveKit, Holoscan, etc.; NO local Nemotron):
+# Start (default: LiveKit, agent, Qdrant, holoscan-bridge, etc.; NO local Nemotron):
 #   docker compose -f docker-compose.gpu.yml up -d --build
+# Optional NVIDIA on-GPU Riva + Holoscan (use after NGC + Riva init — see services/riva/README.md):
+#   COMPOSE_PROFILES=nvidia docker compose -f docker-compose.gpu.yml up -d
 # Optional: local NIM on GPU (large image + NGC; only if you need offline LLM):
 #   docker compose -f docker-compose.gpu.yml --profile local-nim up -d
 # Stop:   docker compose -f docker-compose.gpu.yml down
@@ -27,7 +29,7 @@ services:
       - "7881:7881"   # RTC (UDP/TCP)
       - "7882:7882"   # TURN/TLS
     environment:
-      - LIVEKIT_KEYS=${LIVEKIT_API_KEY}:${LIVEKIT_API_SECRET}
+      - LIVEKIT_KEYS=${LIVEKIT_API_KEY:-devkey}:${LIVEKIT_API_SECRET:-devsecret}
       - LIVEKIT_ENABLE_WEBSOCKET_RELAY=true
     volumes:
       - ./services/livekit/livekit.yaml:/livekit.yaml
@@ -37,8 +39,12 @@ services:
   # ═══════════════════════════════════════════════════════
   # 2. NVIDIA Riva — Speech AI (ASR + KWS + optional TTS)
   #    VRAM: ~4-5GB
+  #    profile "nvidia" — the bare image often exits(0) until models exist; use
+  #    NVIDIA Riva Quick Start (riva_init + riva_start) or NGC; see services/riva/README.md
   # ═══════════════════════════════════════════════════════
   riva:
+    profiles:
+      - nvidia
     image: nvcr.io/nvidia/riva/riva-speech:2.17.0
     ports:
       - "50051:50051"  # gRPC
@@ -49,6 +55,10 @@ services:
       - RIVA_KWS_ENABLE=true
       - RIVA_TTS_ENABLE=true
       - RIVA_NMT_ENABLE=true
+      - NGC_API_KEY=${NGC_API_KEY:-}
+    # Helps some NVIDIA dev images that default to a shell when non-interactive
+    tty: true
+    stdin_open: true
     deploy:
       resources:
         reservations:
@@ -74,7 +84,7 @@ services:
       - "8000:8000"
     environment:
       - NIM_CACHE_PATH=/opt/nim/.cache
-      - NGC_API_KEY=${NGC_API_KEY}
+      - NGC_API_KEY=${NGC_API_KEY:-}
     deploy:
       resources:
         reservations:
@@ -128,10 +138,24 @@ services:
   # 6. Holoscan Runtime — 3 Vision Pipelines
   #    Runs Monitor Sentinel, The Sentinel, Surgeon's Eye
   #    VRAM: ~12-15GB (shared across 3 graphs)
+  #    profile "nvidia" + NVIDIA-recommended host flags (SHMEM, IPC) — see image banner
   #    HoloHub graphs: clone holohub, build ai_surgical_video, mount into ./services/holoscan
   # ═══════════════════════════════════════════════════════
   holoscan:
+    profiles:
+      - nvidia
     image: nvcr.io/nvidia/clara-holoscan/holoscan:v3.0.0-dgpu
+    ipc: host
+    cap_add:
+      - SYS_PTRACE
+    ulimits:
+      memlock:
+        soft: -1
+        hard: -1
+      stack: 67108864
+    shm_size: 1g
+    tty: true
+    stdin_open: true
     deploy:
       resources:
         reservations:
@@ -144,8 +168,8 @@ services:
       - holoscan_models:/app/models
     environment:
       - LIVEKIT_URL=ws://livekit:7880
-      - LIVEKIT_API_KEY=${LIVEKIT_API_KEY}
-      - LIVEKIT_API_SECRET=${LIVEKIT_API_SECRET}
+      - LIVEKIT_API_KEY=${LIVEKIT_API_KEY:-devkey}
+      - LIVEKIT_API_SECRET=${LIVEKIT_API_SECRET:-devsecret}
       - AGENT_BUS_URL=http://agent-orchestrator:9000
     restart: unless-stopped
 
@@ -165,25 +189,23 @@ services:
       # Cloud NIM (default). For local NIM container, add profile local-nim and set
       # NVIDIA_NIM_BASE_URL=http://nim:8000/v1
       - NVIDIA_NIM_BASE_URL=${NVIDIA_NIM_BASE_URL:-https://integrate.api.nvidia.com/v1}
-      - NVIDIA_API_KEY=${NVIDIA_API_KEY}
+      - NVIDIA_API_KEY=${NVIDIA_API_KEY:-}
       - RIVA_GRPC_URL=riva:50051
       - FISH_SPEECH_URL=http://fish-speech:8080
       - PIPER_URL=http://piper:8090
       - QDRANT_URL=http://qdrant:6333
       - REDIS_URL=redis://redis:6379/0
       - LIVEKIT_URL=ws://livekit:7880
-      - LIVEKIT_API_KEY=${LIVEKIT_API_KEY}
-      - LIVEKIT_API_SECRET=${LIVEKIT_API_SECRET}
-      - OPENROUTER_API_KEY=${OPENROUTER_API_KEY}
+      - LIVEKIT_API_KEY=${LIVEKIT_API_KEY:-}
+      - LIVEKIT_API_SECRET=${LIVEKIT_API_SECRET:-}
+      - OPENROUTER_API_KEY=${OPENROUTER_API_KEY:-}
       - RIVA_HTTP_BASE=${RIVA_HTTP_BASE:-http://riva:8000}
       - HOLOSCAN_BASE_URL=${HOLOSCAN_BASE_URL:-http://holoscan-bridge:9100}
       - VIDEO_INGEST_MODE=${VIDEO_INGEST_MODE:-webrtc}
       - INTERNAL_BUS_TOKEN=${INTERNAL_BUS_TOKEN:-}
     depends_on:
-      - riva
       - fish-speech
       - piper
-      - holoscan
       - holoscan-bridge
       - qdrant
       - redis
