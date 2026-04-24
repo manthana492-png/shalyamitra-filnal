@@ -72,6 +72,13 @@ class Settings(BaseSettings):
     consultant_model: str = "openai/gpt-4.1"
     chronicler_model: str = "anthropic/claude-sonnet-4"
 
+    # ── Holoscan / HoloHub / capture mode ───────────────────
+    # WebRTC = phones/LiveKit (default). hsb = Holoscan Sensor Bridge (SDI/HDMI).
+    video_ingest_mode: str = "webrtc"  # webrtc | hsb
+    holoscan_base_url: str = "http://localhost:9100"  # holoscan-bridge HTTP
+    # Service-to-service (holoscan-bridge → agent). Empty = do not require header.
+    internal_bus_token: str = ""
+
     # ── Zero-Shot Instrument Detection ──────────────────
     # Tier 1: Grounding DINO 1.5 Pro (best accuracy)
     # Apply for token: https://deepdataspace.com
@@ -105,8 +112,19 @@ class Settings(BaseSettings):
     # NIM Content Safety — guardrails for clinical output
     nim_safety_model: str = "nvidia/nemotron-content-safety-reasoning-4b"
 
-    # ── NVIDIA Riva (ASR + KWS) ──────────────────────────
+    # ── NVIDIA Riva (ASR + KWS + TTS + NMT when enabled in container) ─
     riva_grpc_url: str = "localhost:50051"
+    # Riva gRPC is on 50051; many stacks expose a sidecar/HTTP on another port.
+    # ASR in code uses: riva_http_base + /asr/recognize
+    riva_http_base: str = "http://localhost:8000"
+    # Prefer Riva TTS (NVAIE) before Fish Speech for normal speech when True
+    riva_tts_enable: bool = True
+    riva_tts_voice: str = "English-US.Female-1"
+    # Optional: gRPC custom model / RMIR name for domain-tuned ASR (set in Riva)
+    riva_acoustic_model: str = ""
+    riva_nmt_enable: bool = True
+    riva_nmt_default_source: str = "en"
+    riva_nmt_default_target: str = "hi"
 
     # ── Fish Speech TTS ──────────────────────────────────
     fish_speech_url: str = "http://localhost:8080"

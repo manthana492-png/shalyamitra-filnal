@@ -17,6 +17,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from app.config import settings
 from app.api import sessions, preop, postop, profiles, admin, voice, camera, marma, safety
+from app.api import internal_holoscan
 from app.ws.realtime import router as ws_router
 
 
@@ -47,6 +48,15 @@ async def lifespan(app: FastAPI):
     print(f"   NIM API      : {nim_status}")
     print(f"   NIM Models   : {settings.nim_reasoning_model} (primary), {settings.nim_thinking_model} (thinking)")
     print(f"   NIM Vision   : {settings.nim_vision_model}")
+    print(
+        f"   Video ingest : {settings.video_ingest_mode} "
+        f"(holoscan bridge: {settings.holoscan_base_url or 'not set'})"
+    )
+    print(
+        f"   Riva stack   : HTTP {settings.riva_http_base} | "
+        f"TTS={'on' if settings.riva_tts_enable else 'off'} | "
+        f"NMT={'on' if settings.riva_nmt_enable else 'off'}"
+    )
     print(f"   MCP Servers  : marma(3001) drug(3002) safety(3003)")
     yield
     # ── Shutdown ──────────────────────────────────────────
@@ -83,6 +93,11 @@ app.include_router(voice.router, prefix="/api/voice", tags=["Voice"])
 app.include_router(camera.router, prefix="/api/camera", tags=["Camera"])
 app.include_router(marma.router, prefix="/api/marma", tags=["Marma Knowledge"])
 app.include_router(safety.router, prefix="/api/safety", tags=["Safety & Compliance"])
+app.include_router(
+    internal_holoscan.router,
+    prefix="/api/internal",
+    tags=["Internal — Holoscan"],
+)
 
 # ── WebSocket Realtime ────────────────────────────────────
 app.include_router(ws_router)

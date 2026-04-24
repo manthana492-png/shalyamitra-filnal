@@ -23,6 +23,7 @@ from app.agents.voice_profiles import get_voice_manager
 from app.agents.asr_pipeline import get_asr_pipeline
 from app.agents.tts_router import get_tts_router
 from app.config import settings
+from app.speech.riva_client import riva_translate_nmt
 
 
 router = APIRouter()
@@ -35,6 +36,13 @@ class VoicePreferenceUpdate(BaseModel):
 class VoiceTestRequest(BaseModel):
     voice_id: Optional[str] = None
     text: str = "Good morning, Doctor. Pre-operative analysis loaded. I'm here when you need me."
+
+
+class NmtRequest(BaseModel):
+    """Riva NMT: translate theatre speech or transcripts (e.g. en → hi)."""
+    text: str
+    source_lang: str = "en"
+    target_lang: str = "hi"
 
 
 @router.get("/voices")
@@ -145,6 +153,31 @@ async def test_voice(
     }
 
 
+@router.post("/translate")
+async def translate_text(
+    body: NmtRequest,
+    user: AuthUser = Depends(get_current_user),
+):
+    """
+    Neural machine translation via NVIDIA Riva NMT (when enabled and HTTP exposed).
+    """
+    if not settings.riva_nmt_enable:
+        raise HTTPException(status_code=400, detail="NMT disabled in configuration")
+    out = await riva_translate_nmt(
+        body.text, body.source_lang, body.target_lang
+    )
+    if not out:
+        raise HTTPException(
+            status_code=502,
+            detail="NMT unavailable — check Riva NMT is enabled and riva_http_base is correct",
+        )
+    return {
+        "translated_text": out,
+        "source_lang": body.source_lang,
+        "target_lang": body.target_lang,
+    }
+
+
 @router.get("/health")
 async def audio_health(user: AuthUser = Depends(get_current_user)):
     """
@@ -165,11 +198,25 @@ async def audio_health(user: AuthUser = Depends(get_current_user)):
             "fallback_chain": ["riva", "gemini_flash", "whisper_openrouter", "browser"],
         },
         "tts": {
+            "riva_tts_enabled": settings.riva_tts_enable,
+            "riva_tts_available": getattr(tts, "_riva_tts_healthy", True),
             "fish_speech_available": tts._fish_healthy,
             "piper_available": tts._piper_healthy,
             "openrouter_available": bool(settings.openrouter_api_key),
             "browser_fallback": True,  # Always available
-            "fallback_chain": ["piper (critical)", "fish_speech", "gemini/openrouter", "browser"],
+            "fallback_chain": [
+                "piper (critical)",
+                "riva_tts (info)",
+                "fish_speech",
+                "gemini/openrouter",
+                "browser",
+            ],
+        },
+        "nmt": {
+            "riva_nmt_enabled": settings.riva_nmt_enable,
+        },
+        "ingest": {
+            "video_ingest_mode": settings.video_ingest_mode,
         },
         "wake_word": {
             "riva_kws": False,       # Not yet deployed

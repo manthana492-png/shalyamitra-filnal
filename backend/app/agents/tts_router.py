@@ -27,12 +27,14 @@ import httpx
 
 from app.config import settings
 from app.agents.voice_profiles import get_voice_manager, VoiceProfile, VoiceCategory
+from app.speech.riva_client import riva_synthesize_tts
 
 
 class TTSEngine(str, Enum):
     """Available TTS engines in priority order."""
     PIPER = "piper"                 # Critical alerts only — CPU, ultra-fast
-    FISH_SPEECH = "fish_speech"     # Primary conversational — GPU
+    RIVA = "riva"                   # NVIDIA Riva TTS (NVAIE) — unified stack
+    FISH_SPEECH = "fish_speech"     # Conversational — GPU (legacy / character voices)
     OPENROUTER = "openrouter"       # Fallback 1 — cloud API
     BROWSER = "browser"             # Fallback 2 — client-side Web Speech API
 
@@ -85,6 +87,7 @@ class TTSRouter:
         self._http: Optional[httpx.AsyncClient] = None
         self._fish_healthy = True
         self._piper_healthy = True
+        self._riva_tts_healthy = True
         self._last_health_check = 0.0
 
     async def _get_http(self) -> httpx.AsyncClient:
@@ -124,6 +127,12 @@ class TTSRouter:
             if result:
                 return result
             # If Piper fails, fall through to Fish Speech
+
+        # ── NVIDIA Riva TTS (normal / info speech) ────────
+        if self._riva_tts_healthy and settings.riva_tts_enable:
+            result = await self._try_riva_tts(text, voice, start)
+            if result:
+                return result
 
         # ── Primary: Fish Speech 1.5 ─────────────────────
         if self._fish_healthy:
@@ -188,6 +197,30 @@ class TTSRouter:
                 asyncio.get_event_loop().call_later(30, self._reset_piper_health)
 
         return None
+
+    async def _try_riva_tts(self, text: str, voice: VoiceProfile,
+                            start: float) -> Optional[TTSResult]:
+        """NVIDIA Riva TTS — same vendor as ASR when HTTP endpoints are exposed."""
+        try:
+            raw = await riva_synthesize_tts(text, voice=settings.riva_tts_voice)
+            if raw:
+                audio_b64 = base64.b64encode(raw).decode("utf-8")
+                elapsed = (time.monotonic() - start) * 1000
+                return TTSResult(
+                    audio_b64=audio_b64,
+                    mime_type="audio/wav",
+                    engine_used=TTSEngine.RIVA,
+                    voice_id=voice.id,
+                    latency_ms=elapsed,
+                    is_fallback=False,
+                )
+        except Exception:
+            self._riva_tts_healthy = False
+            asyncio.get_event_loop().call_later(30, self._reset_riva_tts_health)
+        return None
+
+    def _reset_riva_tts_health(self):
+        self._riva_tts_healthy = True
 
     async def _try_fish_speech(self, text: str, voice: VoiceProfile,
                                 start: float) -> Optional[TTSResult]:

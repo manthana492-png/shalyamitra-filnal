@@ -233,12 +233,13 @@ class VisionOrchestrator:
         if settings.gpu_provider.value == "demo":
             return False  # No Holoscan in demo mode
 
+        base = (settings.holoscan_base_url or settings.gpu_backend_url or "").strip()
+        if not base:
+            return False
         try:
             import httpx
             async with httpx.AsyncClient(timeout=3.0) as client:
-                resp = await client.get(
-                    f"{settings.gpu_backend_url or 'http://localhost:9100'}/health"
-                )
+                resp = await client.get(f"{base.rstrip('/')}/health")
                 return resp.status_code == 200
         except Exception:
             return False

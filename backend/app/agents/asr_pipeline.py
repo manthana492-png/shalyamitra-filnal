@@ -36,6 +36,7 @@ from typing import AsyncIterator, Optional
 import httpx
 
 from app.config import settings
+from app.speech.riva_client import extract_speaker_from_asr_json, with_acoustic_hint
 
 
 class ASREngine(str, Enum):
@@ -177,21 +178,27 @@ class ASRPipeline:
             http = await self._get_http()
             audio_bytes = base64.b64decode(audio_b64)
 
-            # Riva's offline/batch recognition endpoint
+            # Riva batch recognition over HTTP (port from settings.riva_http_base)
+            asr_url = f"{settings.riva_http_base.rstrip('/')}/asr/recognize"
             resp = await http.post(
-                f"http://{settings.riva_grpc_url.replace(':50051', ':8001')}/asr/recognize",
+                asr_url,
                 content=audio_bytes,
-                headers={
+                headers=with_acoustic_hint({
                     "Content-Type": f"audio/{codec}",
                     "Accept": "application/json",
-                },
+                }),
                 timeout=3.0,
             )
 
             if resp.status_code == 200:
                 data = resp.json()
+                if isinstance(data, list) and data:
+                    data = data[0]
+                if not isinstance(data, dict):
+                    data = {}
                 transcript = data.get("text", "") or data.get("transcript", "")
                 confidence = data.get("confidence", 0.9)
+                speaker = extract_speaker_from_asr_json(data)
                 elapsed = (time.monotonic() - start) * 1000
                 return ASRResult(
                     text=transcript,
@@ -201,6 +208,7 @@ class ASRPipeline:
                     is_fallback=False,
                     latency_ms=elapsed,
                     language=language,
+                    speaker=speaker,
                 )
         except Exception:
             self._riva_healthy = False
@@ -367,10 +375,8 @@ class ASRPipeline:
         # Riva health check
         try:
             http = await self._get_http()
-            resp = await http.get(
-                f"http://{settings.riva_grpc_url.replace(':50051', ':8001')}/health",
-                timeout=2.0,
-            )
+            health = f"{settings.riva_http_base.rstrip('/')}/health"
+            resp = await http.get(health, timeout=2.0)
             self._riva_healthy = resp.status_code == 200
         except Exception:
             self._riva_healthy = False

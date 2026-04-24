@@ -42,10 +42,13 @@ services:
     image: nvcr.io/nvidia/riva/riva-speech:2.17.0
     ports:
       - "50051:50051"  # gRPC
+      # Map Triton/HTTP when your Riva build exposes it (often 8000) so host can debug:
+      # - "8000:8000"
     environment:
       - RIVA_ASR_ENABLE=true
       - RIVA_KWS_ENABLE=true
-      - RIVA_TTS_ENABLE=false  # Using Fish Speech instead
+      - RIVA_TTS_ENABLE=true
+      - RIVA_NMT_ENABLE=true
     deploy:
       resources:
         reservations:
@@ -108,14 +111,27 @@ services:
     restart: unless-stopped
 
   # ═══════════════════════════════════════════════════════
+  # 5b. Holoscan bridge — health + forward HoloHub events → agent
+  #     (NVIDIA holoscan image has no ShalyaMitra /health; this service does)
+  # ═══════════════════════════════════════════════════════
+  holoscan-bridge:
+    build: ./services/holoscan-bridge
+    ports:
+      - "9100:9100"
+    environment:
+      - VIDEO_INGEST_MODE=${VIDEO_INGEST_MODE:-webrtc}
+      - AGENT_BASE_URL=http://agent-orchestrator:9000
+      - INTERNAL_BUS_TOKEN=${INTERNAL_BUS_TOKEN:-}
+    restart: unless-stopped
+
+  # ═══════════════════════════════════════════════════════
   # 6. Holoscan Runtime — 3 Vision Pipelines
   #    Runs Monitor Sentinel, The Sentinel, Surgeon's Eye
   #    VRAM: ~12-15GB (shared across 3 graphs)
+  #    HoloHub graphs: clone holohub, build ai_surgical_video, mount into ./services/holoscan
   # ═══════════════════════════════════════════════════════
   holoscan:
     image: nvcr.io/nvidia/clara-holoscan/holoscan:v3.0.0-dgpu
-    ports:
-      - "9100:9100"   # Internal event bus
     deploy:
       resources:
         reservations:
@@ -159,11 +175,16 @@ services:
       - LIVEKIT_API_KEY=${LIVEKIT_API_KEY}
       - LIVEKIT_API_SECRET=${LIVEKIT_API_SECRET}
       - OPENROUTER_API_KEY=${OPENROUTER_API_KEY}
+      - RIVA_HTTP_BASE=${RIVA_HTTP_BASE:-http://riva:8000}
+      - HOLOSCAN_BASE_URL=${HOLOSCAN_BASE_URL:-http://holoscan-bridge:9100}
+      - VIDEO_INGEST_MODE=${VIDEO_INGEST_MODE:-webrtc}
+      - INTERNAL_BUS_TOKEN=${INTERNAL_BUS_TOKEN:-}
     depends_on:
       - riva
       - fish-speech
       - piper
       - holoscan
+      - holoscan-bridge
       - qdrant
       - redis
     command: >
