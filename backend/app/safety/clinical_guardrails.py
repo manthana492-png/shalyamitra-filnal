@@ -319,7 +319,7 @@ Return ONLY valid JSON:
                     f"{settings.openrouter_base_url}/chat/completions",
                     headers={
                         "Authorization": f"Bearer {settings.openrouter_api_key}",
-                        "HTTP-Referer": "https://shalyamitra.dev",
+                        "HTTP-Referer": "https://shalyamitra.quaasx108.com",
                     },
                     json={
                         "model": "google/gemini-2.0-flash-001",

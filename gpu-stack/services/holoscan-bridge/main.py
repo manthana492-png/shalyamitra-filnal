@@ -8,6 +8,7 @@ Holoscan bridge — HTTP face for HoloHub / Holoscan event ingress.
 
 from __future__ import annotations
 
+import asyncio
 import os
 from typing import Any, Optional
 
@@ -56,6 +57,40 @@ def _headers(x_internal: Optional[str]) -> dict[str, str]:
     elif x_internal:
         h["X-Internal-Token"] = x_internal
     return h
+
+
+class CameraFrameIn(BaseModel):
+    """JPEG/PNG frame forwarded to agent CameraManager."""
+
+    session_id: str = ""
+    camera_id: str = Field(..., description="cam1 | cam2 | cam3")
+    image_b64: str
+    mime_type: str = "image/jpeg"
+
+
+@app.post("/v1/ingest_frame")
+async def ingest_frame(
+    body: CameraFrameIn,
+    x_internal_token: Optional[str] = Header(None, alias="X-Internal-Token"),
+):
+    """GPU / HoloHub frame ingress → agent internal camera API with retries."""
+    url = f"{AGENT_BASE.rstrip('/')}/api/internal/camera/frame"
+    headers = _headers(x_internal_token)
+    payload = body.model_dump()
+    last_err: Optional[str] = None
+
+    for attempt in range(3):
+        try:
+            async with httpx.AsyncClient(timeout=15.0) as client:
+                r = await client.post(url, json=payload, headers=headers)
+                if r.status_code < 400:
+                    return {"status": "ok", "camera_id": body.camera_id, "forwarded": True}
+                last_err = f"HTTP {r.status_code}: {r.text[:400]}"
+        except httpx.RequestError as e:
+            last_err = str(e)
+        await asyncio.sleep(0.25 * (attempt + 1))
+
+    raise HTTPException(status_code=502, detail=last_err or "forward failed")
 
 
 @app.post("/v1/forward")

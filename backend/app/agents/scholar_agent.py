@@ -109,7 +109,7 @@ Be precise, cite sources if available, keep under 50 words."""
             resp = await http.post(
                 f"{settings.openrouter_base_url}/chat/completions",
                 headers={"Authorization": f"Bearer {settings.openrouter_api_key}",
-                         "HTTP-Referer": "https://shalyamitra.dev", "X-Title": "ShalyaMitra Scholar"},
+                         "HTTP-Referer": "https://shalyamitra.quaasx108.com", "X-Title": "ShalyaMitra Scholar"},
                 json={"model": settings.scholar_model, "messages": [{"role": "user", "content": prompt}],
                       "max_tokens": 500, "temperature": 0.2},
                 timeout=15.0,

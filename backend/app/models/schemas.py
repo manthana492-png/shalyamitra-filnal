@@ -26,6 +26,7 @@ class AriaMode(str, Enum):
 
     silent = "silent"
     reactive = "reactive"
+    proactive = "proactive"
 
 
 # --- Session CRUD -----------------------------------------------------------
@@ -77,6 +78,8 @@ class SessionRead(BaseModel):
 
 
 class PreOpRequest(BaseModel):
+    model_config = ConfigDict(extra="allow")
+
     session_id: str
 
 

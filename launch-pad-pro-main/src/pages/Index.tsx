@@ -11,6 +11,7 @@ import heroImage from "@/assets/hero-hud.jpg";
 
 const Index = () => {
   const { user } = useAuth();
+  const demoEnabled = String(import.meta.env.VITE_DEMO_MODE || "").toLowerCase() === "true";
 
   return (
     <div className="min-h-screen bg-background hud-scanline">
@@ -69,6 +70,11 @@ const Index = () => {
                 <Button asChild variant="outline" size="lg" className="border-primary/40">
                   <Link to={user ? "/dashboard" : "/auth"}>{user ? "Open dashboard" : "Sign in"}</Link>
                 </Button>
+                {demoEnabled && (
+                  <Button asChild variant="ghost" size="lg">
+                    <Link to="/demo">Open scripted demo</Link>
+                  </Button>
+                )}
               </div>
 
               <dl className="mt-12 grid grid-cols-2 md:grid-cols-4 gap-6 max-w-2xl">

@@ -2,17 +2,14 @@
 ShalyaMitra — WebSocket Realtime Endpoint
 
 This is the CRITICAL bridge between the frontend Theatre Display and the
-GPU backend. It replaces the Supabase edge functions (nael-realtime, mock-gpu).
+GPU backend.
 
 The frontend's `realtime-stream.ts` connects here and receives ServerEvents
 exactly matching the wire protocol defined in gpu-adapter.ts.
 
 Modes:
-  1. "demo"  — plays back a scripted demo session (no GPU required)
-  2. "mock"  — server-side scripted feed (proves WS pipeline end-to-end)
-  3. "live"  — relays events from the real GPU stack via LiveKit / internal bus
-
-The frontend auto-falls-back: live → mock → scripted (client-side).
+  1. demo mode (explicitly enabled) — scripted feed for demo surface only
+  2. production mode (default)      — relays real live pipeline only
 """
 
 from __future__ import annotations
@@ -109,6 +106,24 @@ def vitals_at(t: float) -> dict:
     return {"hr": hr, "spo2": spo2, "map": map_val, "etco2": etco2, "temp": temp, "rr": rr}
 
 
+def _aria_allows_alert(mode: AriaMode, severity: str) -> bool:
+    if severity == "critical":
+        return True
+    if mode == AriaMode.silent:
+        return False
+    if mode == AriaMode.reactive and severity in ("info", "caution"):
+        return False
+    return True
+
+
+def _dev_bypass_user() -> AuthUser:
+    return AuthUser(
+        sub=settings.dev_auth_bypass_sub,
+        email=settings.dev_auth_bypass_email,
+        role=settings.dev_auth_bypass_role or "admin",
+    )
+
+
 # ══════════════════════════════════════════════════════════
 # WebSocket Endpoint
 # ══════════════════════════════════════════════════════════
@@ -144,16 +159,33 @@ async def ws_realtime(
         msg = json.loads(raw)
 
         if msg.get("type") == "auth":
-            session_id = msg.get("sessionId", "demo")
+            session_id = msg.get("sessionId", "")
             token = msg.get("token", "")
             try:
-                user = decode_supabase_jwt(token)
-            except Exception:
-                # Accept anyway in demo mode
-                user = AuthUser(
-                    sub="00000000-0000-0000-0000-000000000000",
-                    email="demo@shalyamitra.dev",
-                )
+                if token:
+                    user = decode_supabase_jwt(token)
+                elif settings.dev_auth_bypass:
+                    user = _dev_bypass_user()
+                else:
+                    user = decode_supabase_jwt(token)
+            except Exception as exc:
+                if settings.dev_auth_bypass:
+                    user = _dev_bypass_user()
+                    token = ""
+                    pass
+                elif not settings.demo_mode:
+                    await ws.send_text(
+                        orjson.dumps(
+                            {"type": "error", "code": "unauthorized", "message": str(exc)}
+                        ).decode()
+                    )
+                    await ws.close()
+                    return
+                else:
+                    user = AuthUser(
+                        sub="00000000-0000-0000-0000-000000000000",
+                        email="demo@shalyamitra.quaasx108.com",
+                    )
     except (asyncio.TimeoutError, Exception):
         await ws.send_text(orjson.dumps({"type": "error", "code": "auth_timeout", "message": "Auth timeout"}).decode())
         await ws.close()
@@ -162,17 +194,42 @@ async def ws_realtime(
     # ── Route to appropriate handler ──────────────────────
     gpu_mode = settings.gpu_provider.value
     use_nim = settings.nim_live_test and bool(settings.nvidia_api_key)
+    demo_requested = gpu_mode == "demo" or session_id == "demo"
+    if demo_requested and not settings.demo_mode:
+        await ws.send_text(
+            orjson.dumps(
+                {
+                    "type": "error",
+                    "code": "demo_disabled",
+                    "message": "Demo mode is disabled in production runtime",
+                }
+            ).decode()
+        )
+        await ws.close()
+        return
 
-    if (gpu_mode == "demo" or session_id == "demo") and use_nim:
-        # LIVE NIM MODE — real Nemotron 49B AI, simulated vitals
+    if demo_requested and use_nim:
         from app.ws.nim_session import handle_nim_session
-        print(f"[WS] Starting LIVE NIM session (real Nemotron 49B inference)")
+
+        print("[WS] Starting LIVE NIM demo session")
         await handle_nim_session(ws, mode)
-    elif gpu_mode == "demo" or session_id == "demo":
+        return
+    if demo_requested:
         await _handle_demo_session(ws, mode)
-    else:
-        # Live GPU mode — relay to GPU stack
-        await _handle_live_session(ws, session_id, mode)
+        return
+    if not session_id:
+        await ws.send_text(
+            orjson.dumps(
+                {
+                    "type": "error",
+                    "code": "invalid_session",
+                    "message": "sessionId is required for live runtime",
+                }
+            ).decode()
+        )
+        await ws.close()
+        return
+    await _handle_live_session(ws, session_id, mode)
 
 
 async def _handle_demo_session(ws: WebSocket, mode: AriaMode):
@@ -244,24 +301,148 @@ async def _handle_demo_session(ws: WebSocket, mode: AriaMode):
 
 
 async def _handle_live_session(ws: WebSocket, session_id: str, mode: AriaMode):
-    """
-    Live GPU session — relay events between frontend and GPU stack.
+    """Live session — ShalyaBus + vision/audio ingress surfaced over this WebSocket."""
+    import json as _json
 
-    In production, this:
-      1. Verifies the GPU instance is running for this session
-      2. Opens an internal connection to the agent orchestrator on the GPU
-      3. Relays frontend audio/video → GPU, GPU events → frontend
+    from app.session.lifecycle import SessionPhase, get_session_manager
+    from app.agents.orchestrator import get_orchestrator, AgentEvent, EventType
+    from app.agents.surgical_memory import get_cortex
+    from app.ws.display_wire import agent_display_to_wire_dict
+    from app.agents.asr_pipeline import get_asr_pipeline
+    from app.agents.wake_word import get_wake_word_detector
+    from app.agents.tts_router import get_tts_router
 
-    For now (pre-GPU), falls back to demo mode with a notice.
-    """
-    # TODO: Implement GPU relay when GPU orchestrator is ready
-    # For now, notify frontend that live mode isn't available
-    await ws.send_text(orjson.dumps({
-        "type": "error", "code": "demo_mode",
-        "message": "GPU backend not connected. Falling back to demo mode.",
-    }).decode())
-    # The frontend's realtime-stream.ts will auto-fallback to scripted mode
-    await ws.close()
+    mgr = get_session_manager()
+    orch = get_orchestrator()
+    metrics = getattr(ws.app.state, "metrics", {}) or {}
+
+    if not mgr.get_session(session_id):
+        await mgr.create_session(session_id, "Live theatre", {}, "")
+
+    cx = get_cortex()
+    if cx.session_id != session_id:
+        await orch.start_session(session_id, procedure="Live theatre", weight_kg=70.0, age=50)
+
+    ss = mgr.get_session(session_id)
+    if ss and ss.phase != SessionPhase.INTRA_OP:
+        await mgr.start_intraop(session_id)
+
+    try:
+        metrics["ws_live_sessions"] = int(metrics.get("ws_live_sessions", 0)) + 1
+    except Exception:
+        pass
+
+    await get_tts_router().pregenerate_alerts()
+
+    start_mono = time.monotonic()
+
+    async def push_agent_event(agent_ev: AgentEvent):
+        elapsed = time.monotonic() - start_mono
+        wire = agent_display_to_wire_dict(agent_ev, elapsed)
+        if not wire:
+            return
+        if wire.get("type") == "alert":
+            sev = wire.get("severity", "info")
+            if not _aria_allows_alert(mode, sev):
+                return
+        try:
+            await ws.send_text(orjson.dumps(wire).decode())
+        except Exception:
+            pass
+
+    mgr.register_ws_callback(session_id, push_agent_event)
+
+    try:
+        while True:
+            raw = await ws.receive_text()
+            msg = _json.loads(raw)
+            mtype = msg.get("type")
+            if mtype == "ping":
+                await ws.send_text(orjson.dumps({"type": "pong", "ts": msg.get("ts", 0)}).decode())
+            elif mtype == "control":
+                try:
+                    mode = AriaMode(msg.get("mode", "reactive"))
+                except Exception:
+                    mode = AriaMode.reactive
+            elif mtype == "client_audio":
+                metrics["asr_chunks"] = int(metrics.get("asr_chunks", 0)) + 1
+                audio_b64 = msg.get("audioBase64") or msg.get("audio_b64") or ""
+                codec = msg.get("codec", "opus")
+                detector = get_wake_word_detector()
+                ww_audio = await detector.detect_in_audio(audio_b64, codec)
+                asr = await get_asr_pipeline().transcribe(audio_b64, codec)
+                metrics[f"asr_engine_{asr.engine_used.value}"] = int(
+                    metrics.get(f"asr_engine_{asr.engine_used.value}", 0)
+                ) + 1
+
+                text = (asr.text or "").strip()
+                ww_text = await detector.detect_in_text(text) if text else None
+
+                if ww_audio and ww_audio.detected:
+                    await orch.dispatch(
+                        AgentEvent(
+                            type=EventType.WAKE_WORD,
+                            source="wake_word_audio",
+                            session_id=session_id,
+                            priority=4,
+                            data={
+                                "word_type": getattr(
+                                    ww_audio.word_type, "value", str(ww_audio.word_type)
+                                ),
+                                "keyword": ww_audio.keyword,
+                                "confidence": ww_audio.confidence,
+                                "engine": getattr(
+                                    ww_audio.engine_used, "value", str(ww_audio.engine_used)
+                                ),
+                            },
+                        )
+                    )
+                elif ww_text and ww_text.detected:
+                    await orch.dispatch(
+                        AgentEvent(
+                            type=EventType.WAKE_WORD,
+                            source="wake_word_text",
+                            session_id=session_id,
+                            priority=4,
+                            data={
+                                "word_type": getattr(
+                                    ww_text.word_type, "value", str(ww_text.word_type)
+                                ),
+                                "keyword": ww_text.keyword,
+                                "confidence": ww_text.confidence,
+                                "engine": getattr(
+                                    ww_text.engine_used, "value", str(ww_text.engine_used)
+                                ),
+                            },
+                        )
+                    )
+
+                if text:
+                    await orch.dispatch(
+                        AgentEvent(
+                            type=EventType.TRANSCRIPT,
+                            source="asr_pipeline",
+                            session_id=session_id,
+                            priority=6,
+                            data={
+                                "text": text,
+                                "speaker": msg.get("speaker", "surgeon"),
+                                "language": asr.language,
+                                "engine": asr.engine_used.value,
+                                "at": time.monotonic() - start_mono,
+                            },
+                        )
+                    )
+    except WebSocketDisconnect:
+        pass
+    finally:
+        mgr.unregister_ws_callback(session_id, push_agent_event)
+        try:
+            metrics["ws_live_sessions"] = max(
+                0, int(metrics.get("ws_live_sessions", 0)) - 1
+            )
+        except Exception:
+            pass
 
 
 # ══════════════════════════════════════════════════════════
@@ -277,6 +458,20 @@ async def ws_mock_gpu(
     Mock GPU endpoint — identical to demo but accessed via a separate URL.
     Proves the WebSocket pipeline end-to-end without a real GPU.
     """
+    if not settings.demo_mode:
+        await ws.accept()
+        await ws.send_text(
+            orjson.dumps(
+                {
+                    "type": "error",
+                    "code": "demo_disabled",
+                    "message": "Mock GPU websocket is disabled in production runtime",
+                }
+            ).decode()
+        )
+        await ws.close()
+        return
+
     await ws.accept()
 
     # Simple auth handshake

@@ -170,6 +170,7 @@ class AgentOrchestrator:
         self._subscriptions: dict[EventType, list[BaseAgent]] = {}
         self._event_log: list[AgentEvent] = []
         self._display_callback: Optional[Callable] = None
+        self._display_callbacks: list[Callable] = []
 
     def register_agent(self, agent: BaseAgent):
         """Register an agent with the orchestrator."""
@@ -184,6 +185,14 @@ class AgentOrchestrator:
         """Set the callback for sending events to the frontend display."""
         self._display_callback = callback
 
+    def add_display_callback(self, callback: Callable):
+        """Append a display subscriber (multi-session WebSocket fan-out)."""
+        if callback not in self._display_callbacks:
+            self._display_callbacks.append(callback)
+
+    def remove_display_callback(self, callback: Callable):
+        self._display_callbacks = [cb for cb in self._display_callbacks if cb is not callback]
+
     async def dispatch(self, event: AgentEvent):
         """
         Dispatch an event to all subscribed agents.
@@ -194,8 +203,14 @@ class AgentOrchestrator:
         self._event_log.append(event)
 
         # If this is a display event, forward to frontend
-        if event.type.value.startswith("display_") and self._display_callback:
-            await self._display_callback(event)
+        if event.type.value.startswith("display_"):
+            for cb in self._display_callbacks:
+                try:
+                    await cb(event)
+                except Exception as e:
+                    print(f"[ORCH] display callback error: {e}")
+            if self._display_callback:
+                await self._display_callback(event)
             return
 
         # Find subscribed agents
@@ -218,6 +233,18 @@ class AgentOrchestrator:
                         await self.dispatch(response_event)
                 except Exception as e:
                     print(f"Agent {agent.agent_id} error: {e}")
+
+        # Fan-out generic ALERT to theatre DISPLAY_ALERT (sentinel/pharmacist/eye bus alerts)
+        if event.type == EventType.ALERT:
+            await self.dispatch(
+                AgentEvent(
+                    type=EventType.DISPLAY_ALERT,
+                    source=event.source,
+                    priority=event.priority,
+                    session_id=event.session_id,
+                    data=dict(event.data),
+                )
+            )
 
     async def start_session(self, session_id: str, procedure: str = "",
                             weight_kg: float = 70.0, age: int = 50):

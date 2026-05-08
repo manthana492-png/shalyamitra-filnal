@@ -127,6 +127,7 @@ class PrivacyRouter:
         self._audit_log: list[RoutingDecision] = []
         self._nim_available: Optional[bool] = None
         self._http: Optional[httpx.AsyncClient] = None
+        self._infer_agent_type: str = "unknown"
 
     async def _get_http(self) -> httpx.AsyncClient:
         if self._http is None or self._http.is_closed:
@@ -201,6 +202,7 @@ class PrivacyRouter:
         4. Fall back to OpenRouter if NIM fails
         """
         start_time = time.time()
+        self._infer_agent_type = agent_type
 
         # STEP 0: Block cloud calls if force-local mode is active
         if self._force_local:
@@ -330,7 +332,7 @@ class PrivacyRouter:
             http = await self._get_http()
             headers = {"Authorization": f"Bearer {api_key}"}
             if not is_nim:
-                headers["HTTP-Referer"] = "https://shalyamitra.dev"
+                headers["HTTP-Referer"] = "https://shalyamitra.quaasx108.com"
                 headers["X-Title"] = "ShalyaMitra"
 
             resp = await http.post(
@@ -358,6 +360,19 @@ class PrivacyRouter:
             phi_categories=list(set(phi_categories)),
             latency_ms=latency,
         ))
+        try:
+            from app.nemoclaw.audit import log_privacy_route
+            log_privacy_route(
+                agent_type=getattr(self, "_infer_agent_type", "unknown"),
+                tier=tier.value if hasattr(tier, "value") else str(tier),
+                reason=reason.value if hasattr(reason, "value") else str(reason),
+                model=model,
+                endpoint=endpoint,
+                phi_detected=phi_detected,
+                latency_ms=latency,
+            )
+        except Exception:
+            pass
 
     def route(self, text: str, agent_type: str = "unknown") -> RoutingDecision:
         """Lightweight routing decision (for audit/display, not execution)."""

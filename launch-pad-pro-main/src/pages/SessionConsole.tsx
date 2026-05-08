@@ -2,7 +2,7 @@ import { useEffect, useMemo, useState, useCallback, useRef } from "react";
 import { useParams, useNavigate, Link } from "react-router-dom";
 import { supabase } from "@/integrations/supabase/client";
 import { type StreamMode } from "@/lib/nael-stream";
-import { useRealtimeStream, type RealtimeSource } from "@/lib/realtime-stream";
+import { useRealtimeStream } from "@/lib/realtime-stream";
 import { useVoiceControl } from "@/hooks/useVoiceControl";
 import { useDirector } from "@/lib/director";
 import { logAudit } from "@/lib/audit";
@@ -24,8 +24,6 @@ import { DevilsAdvocate, type AdvocateEvent } from "@/components/console/DevilsA
 import { SurgeryTimeline } from "@/components/console/SurgeryTimeline";
 import { VoiceCommandOverlay } from "@/components/console/VoiceCommandOverlay";
 import { SessionSummary } from "@/components/console/SessionSummary";
-import { OperatorOverride } from "@/components/console/OperatorOverride";
-import { DEMO_TIMELINE_EVENTS, DEMO_DURATION } from "@/lib/demo-session";
 import { type ShalyaAlert, ALERT_PRIORITY } from "@/lib/pillars";
 import { playAlertTone } from "@/hooks/useAlertAudio";
 import { Button } from "@/components/ui/button";
@@ -65,7 +63,6 @@ const SessionConsole = () => {
   const [loading, setLoading] = useState(true);
   const [running, setRunning] = useState(false);
   const [mode, setMode] = useState<StreamMode>("reactive");
-  const [realtimeSource, setRealtimeSource] = useState<RealtimeSource>("live");
   const [lines, setLines] = useState<TranscriptLine[]>([]);
   const [vitals, setVitals] = useState<Vitals>({ hr: 72, spo2: 98, map: 82, etco2: 36, temp: 36.4, rr: 14 });
   const [hist, setHist] = useState<{ hr: number[]; spo2: number[]; map: number[]; etco2: number[]; temp: number[]; rr: number[] }>({
@@ -184,16 +181,17 @@ const SessionConsole = () => {
     },
     onComplete: () => {
       setRunning(false);
-      toast({ title: "Demo session complete", description: "Move to post-op review when ready." });
+      toast({ title: "Live session stream ended", description: "Check backend realtime pipeline health." });
     },
   }), [mode, id, director]);
 
-  const { elapsed, total, status: streamStatus, resolvedSource } = useRealtimeStream({
-    source: realtimeSource,
+  const { elapsed } = useRealtimeStream({
+    source: "live",
     running,
     mode,
     sessionId: id,
     handlers,
+    allowDemoScripted: false,
   });
 
   // Persist transcript lines
@@ -287,6 +285,10 @@ const SessionConsole = () => {
   const isKnowledgeOpen = director.layoutState === "knowledge_display";
   const isPK = director.layoutState === "pharmacokinetics";
   const isVitalAlert = director.layoutState === "vital_alert";
+  const timelineEvents = useMemo(
+    () => director.alertQueue.map((a) => ({ at: a.at, pillar: a.pillar, label: a.title })),
+    [director.alertQueue],
+  );
 
   return (
     <div className={`min-h-screen bg-background hud-scanline ${viewportAlert}`}>
@@ -419,9 +421,7 @@ const SessionConsole = () => {
               <Badge variant="outline" className="text-[9px] uppercase tracking-wider border-primary/30 text-primary/80">
                 <span className={`pulse-dot ${running ? "live" : "nael"} mr-2`} />
                 {running
-                  ? resolvedSource === "live" || resolvedSource === "mock"
-                    ? "LIVE NIM"
-                    : "DEMO"
+                  ? "LIVE"
                   : "PAUSED"}
               </Badge>
             </div>
@@ -462,7 +462,7 @@ const SessionConsole = () => {
         )}
 
         {/* ── SURGERY TIMELINE ── */}
-        <SurgeryTimeline events={DEMO_TIMELINE_EVENTS} duration={DEMO_DURATION} />
+        <SurgeryTimeline events={timelineEvents} duration={Math.max(1, Math.floor(elapsed) + 1)} />
       </div>
     </div>
   );

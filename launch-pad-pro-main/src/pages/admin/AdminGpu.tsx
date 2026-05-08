@@ -7,13 +7,14 @@ import { Loader2, RefreshCw, Cpu, Wifi, WifiOff, ShieldCheck, Server } from "luc
 import { CdsBanner } from "@/components/CdsBanner";
 
 type HealthRes = {
-  ok: boolean;
-  mode: "live" | "demo";
-  host: GpuHost;
-  hasUrl: boolean;
-  hasToken: boolean;
-  protocol: string;
-  message: string;
+  status: string;
+  service: string;
+  version: string;
+  gpu_provider: string;
+  video_ingest_mode: string;
+  runtime_mode: "production" | "demo";
+  demo_mode: boolean;
+  holoscan_bridge: string | null;
 };
 
 const AdminGpu = () => {
@@ -21,12 +22,12 @@ const AdminGpu = () => {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
-  const projectId = import.meta.env.VITE_SUPABASE_PROJECT_ID as string | undefined;
+  const backend = (import.meta.env.VITE_BACKEND_URL as string | undefined) || "http://localhost:8000";
 
   const check = async () => {
     setLoading(true); setError(null);
     try {
-      const url = `https://${projectId}.functions.supabase.co/aria-realtime/health`;
+      const url = `${backend.replace(/\/$/, "")}/healthz`;
       const res = await fetch(url);
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       const json = (await res.json()) as HealthRes;
@@ -40,7 +41,7 @@ const AdminGpu = () => {
 
   useEffect(() => { check(); /* eslint-disable-next-line react-hooks/exhaustive-deps */ }, []);
 
-  const isLive = health?.mode === "live";
+  const isLive = health?.runtime_mode === "production" && !health.demo_mode;
 
   return (
     <AppShell>
@@ -51,9 +52,7 @@ const AdminGpu = () => {
             <div className="text-hud-label">INFRASTRUCTURE</div>
             <h1 className="text-display text-3xl font-semibold tracking-tight mt-1">GPU Backend</h1>
             <p className="mt-2 text-sm text-muted-foreground max-w-2xl">
-              Wires the ARIA web layer to the NVIDIA GPU stack — Riva, NeMo, Morpheus, Triton, Guardrails.
-              Drop in your <code className="text-mono text-primary">GPU_BACKEND_URL</code> + <code className="text-mono text-primary">GPU_BACKEND_TOKEN</code> via
-              backend secrets and the realtime relay goes live. No UI changes needed.
+              Canonical runtime health from the backend API. Production mode must run live paths only; demo mode is explicit.
             </p>
           </div>
           <Button onClick={check} variant="outline" size="sm" className="border-primary/40">
@@ -73,31 +72,31 @@ const AdminGpu = () => {
               <div>
                 <div className="text-mono text-[10px] uppercase tracking-[0.25em] text-primary/70">RELAY STATUS</div>
                 <div className="text-lg font-semibold mt-0.5">
-                  {error ? "Health check failed" : isLive ? `Live · ${health?.host}` : "Demo mode"}
+                  {error ? "Health check failed" : isLive ? "Production runtime" : "Demo runtime"}
                 </div>
                 <div className="text-xs text-muted-foreground mt-1">
-                  {error ?? health?.message ?? "Checking…"}
+                  {error ?? `provider=${health?.gpu_provider} · ingest=${health?.video_ingest_mode}` ?? "Checking…"}
                 </div>
               </div>
             </div>
             <div className="flex flex-col items-end gap-1">
               <Badge variant="outline" className={`text-[10px] uppercase ${isLive ? "border-success/40 text-success" : "border-border"}`}>
-                {health?.mode ?? "—"}
+                {health?.runtime_mode ?? "—"}
               </Badge>
               <Badge variant="outline" className="text-[10px] text-mono">
-                Protocol {health?.protocol ?? "—"}
+                Demo {health?.demo_mode ? "on" : "off"}
               </Badge>
             </div>
           </div>
 
           <div className="mt-6 grid grid-cols-2 gap-4 text-sm">
             <div className="rounded-lg bg-surface-1/60 p-3 border border-border/50">
-              <div className="text-hud-label mb-1">GPU_BACKEND_URL</div>
-              <div className="text-mono text-xs">{health?.hasUrl ? "✓ configured" : "— not set"}</div>
+              <div className="text-hud-label mb-1">GPU provider</div>
+              <div className="text-mono text-xs">{health?.gpu_provider ?? "—"}</div>
             </div>
             <div className="rounded-lg bg-surface-1/60 p-3 border border-border/50">
-              <div className="text-hud-label mb-1">GPU_BACKEND_TOKEN</div>
-              <div className="text-mono text-xs">{health?.hasToken ? "✓ configured" : "— not set"}</div>
+              <div className="text-hud-label mb-1">Holoscan bridge</div>
+              <div className="text-mono text-xs">{health?.holoscan_bridge ?? "—"}</div>
             </div>
           </div>
         </div>

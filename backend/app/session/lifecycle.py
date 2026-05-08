@@ -127,9 +127,8 @@ class SessionManager:
         session.phase = SessionPhase.PRE_OP
         session.phase_history.append({"phase": "pre_op", "at": time.time()})
 
-        # Initialize orchestrator and dispatch session start for pre-op agents
+        # Display events route globally via orchestrator → SessionManager._broadcast_event (see app lifespan).
         orch = get_orchestrator()
-        orch.set_display_callback(lambda event: self._broadcast_event(session_id, event))
 
         # Scholar and Oracle will pick up SESSION_START
         await orch.dispatch(AgentEvent(
@@ -279,6 +278,8 @@ class SessionManager:
 
     async def _broadcast_event(self, session_id: str, event: AgentEvent):
         """Broadcast an agent event to all WebSocket connections for this session."""
+        if event.session_id and event.session_id != session_id:
+            return
         callbacks = self._ws_callbacks.get(session_id, [])
         for cb in callbacks:
             try:

@@ -114,12 +114,11 @@ function SourceBlock({ source, onChange, sessionId }: { source: RealtimeSource; 
         <SelectTrigger><SelectValue /></SelectTrigger>
         <SelectContent>
           <SelectItem value="scripted">Scripted (local playback)</SelectItem>
-          <SelectItem value="mock">Mock GPU (edge function, no GPU needed)</SelectItem>
-          <SelectItem value="live">Live (aria-realtime → GPU backend)</SelectItem>
+          <SelectItem value="live">Live (backend realtime)</SelectItem>
         </SelectContent>
       </Select>
       <p className="text-[11px] text-muted-foreground">
-        Live falls back to scripted automatically if GPU_BACKEND_URL is not configured.
+        Scripted mode is for explicit demo sessions only.
       </p>
     </Section>
   );

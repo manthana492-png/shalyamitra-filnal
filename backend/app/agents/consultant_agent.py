@@ -95,7 +95,7 @@ IMPORTANT: You are a decision SUPPORT tool. Frame responses as suggestions, not 
                     resp = await http.post(
                         f"{settings.openrouter_base_url}/chat/completions",
                         headers={"Authorization": f"Bearer {settings.openrouter_api_key}",
-                                 "HTTP-Referer": "https://shalyamitra.dev",
+                                 "HTTP-Referer": "https://shalyamitra.quaasx108.com",
                                  "X-Title": "ShalyaMitra Consultant"},
                         json={"model": model,
                               "messages": [{"role": "user", "content": prompt}],

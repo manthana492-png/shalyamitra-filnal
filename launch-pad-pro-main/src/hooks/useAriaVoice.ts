@@ -8,7 +8,8 @@
  */
 
 import { useCallback, useEffect, useRef, useState } from "react";
-import { supabase } from "@/integrations/supabase/client";
+
+const BACKEND_URL = import.meta.env.VITE_BACKEND_URL || "http://localhost:8000";
 
 export function useAriaVoice() {
   const [speaking, setSpeaking] = useState(false);
@@ -47,14 +48,29 @@ export function useAriaVoice() {
       if (typeof window !== "undefined") window.speechSynthesis?.cancel();
 
       try {
-        const { data, error } = await supabase.functions.invoke("aria-tts", {
-          body: { text },
+        const token = localStorage.getItem("sb-access-token") || "";
+        const res = await fetch(`${BACKEND_URL.replace(/\/$/, "")}/api/voice/voices/test`, {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            ...(token ? { Authorization: `Bearer ${token}` } : {}),
+          },
+          body: JSON.stringify({ text }),
         });
-        if (error || !data || data.fallback === "browser_tts" || !data.audioBase64) {
+        if (!res.ok) {
           browserSpeak(text);
           return;
         }
-        const url = `data:${data.mimeType};base64,${data.audioBase64}`;
+        const data = await res.json() as {
+          audio_b64?: string;
+          mime_type?: string;
+          engine_used?: string;
+        };
+        if (!data.audio_b64 || data.engine_used === "browser") {
+          browserSpeak(text);
+          return;
+        }
+        const url = `data:${data.mime_type || "audio/wav"};base64,${data.audio_b64}`;
         const audio = new Audio(url);
         audioRef.current = audio;
         audio.onplay = () => setSpeaking(true);

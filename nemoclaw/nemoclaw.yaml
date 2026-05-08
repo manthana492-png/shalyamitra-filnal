@@ -2,11 +2,12 @@
 # ShalyaMitra — NemoClaw Agent Configuration
 # ═══════════════════════════════════════════════════════
 #
-# This file defines how ShalyaMitra's 11 agents run inside
-# NVIDIA NemoClaw's secure sandbox environment.
+# This file defines governance targets for ShalyaMitra (sandbox profiles,
+# MCP servers, routing hints). The FastAPI backend reads this bundle via
+# `app.nemoclaw.config_bundle` and mounts this directory in production Compose.
 #
-# Deploy: curl -fsSL https://nvidia.com/nemoclaw.sh | bash
-# Then:   nemoclaw init --config ./nemoclaw.yaml
+# Deploy MCP sidecars + backend:
+#   See nemoclaw/README.md and gpu-stack/docker-compose.gpu.yml (nemoclaw-* services).
 # ═══════════════════════════════════════════════════════
 
 agent:

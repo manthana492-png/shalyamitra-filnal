@@ -10,6 +10,11 @@ from enum import Enum
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
+class RuntimeMode(str, Enum):
+    production = "production"
+    demo = "demo"
+
+
 class GpuProvider(str, Enum):
     nebius = "nebius"
     lightning = "lightning"
@@ -30,14 +35,22 @@ class Settings(BaseSettings):
     app_name: str = "ShalyaMitra Backend"
     app_version: str = "1.0.0"
     debug: bool = False
+    runtime_mode: RuntimeMode = RuntimeMode.production
+    enable_demo_mode: bool = False
     cors_origins: list[str] = [
+        # ── Local development ──────────────────────────────
         "http://localhost:5173",
         "http://localhost:8080",
         "http://localhost:3000",
-        "https://*.lightning.ai",
+        # ── Production frontend (Vercel) ──────────────────
+        "https://shalyamitra.quaasx108.com",
         "https://*.vercel.app",
-        "https://shalyamitra.dev",
-        "https://app.shalyamitra.dev",
+        # ── GPU slot subdomain (Cloudflare proxy) ─────────
+        "https://gpu.shalyamitra.quaasx108.com",
+        # ── Lightning AI Studio preview URLs ──────────────
+        "https://*.lightning.ai",
+        # ── Supabase edge functions ────────────────────────
+        "https://*.supabase.co",
     ]
 
     # ── Supabase (auth + DB) ──────────────────────────────
@@ -45,9 +58,15 @@ class Settings(BaseSettings):
     supabase_anon_key: str = ""
     supabase_service_role_key: str = ""
     supabase_jwt_secret: str = ""
+    # Local owner/dev bypass for auth-dependent routes and WS.
+    # Keep OFF in production.
+    dev_auth_bypass: bool = False
+    dev_auth_bypass_sub: str = "00000000-0000-0000-0000-000000000001"
+    dev_auth_bypass_email: str = "owner@localhost"
+    dev_auth_bypass_role: str = "admin"
 
     # ── GPU ────────────────────────────────────────────────
-    gpu_provider: GpuProvider = GpuProvider.demo
+    gpu_provider: GpuProvider = GpuProvider.local
     gpu_backend_url: str = ""
     gpu_backend_token: str = ""
 
@@ -132,6 +151,10 @@ class Settings(BaseSettings):
     # ── Piper TTS (Critical Alert Path) ──────────────────
     piper_url: str = "http://localhost:8090"
 
+    # ── OpenWakeWord (optional CPU wake-word tier) ────────
+    openwakeword_enabled: bool = False
+    openwakeword_threshold: float = 0.6
+
     # ── MinIO (file storage) ─────────────────────────────
     minio_endpoint: str = "localhost:9000"
     minio_access_key: str = "minioadmin"
@@ -143,6 +166,19 @@ class Settings(BaseSettings):
     max_session_hours: int = 8
     default_mode: str = "reactive"
     alert_audio_dir: str = "/app/alerts/pregenerated"
+
+    # ── NemoClaw governance (nemoclaw/*.yaml + MCP tool servers) ──
+    nemoclaw_enabled: bool = True
+    nemoclaw_config_dir: str = ""
+    nemoclaw_audit_log_path: str = ""
+    marma_mcp_url: str = "http://127.0.0.1:3001"
+    drug_mcp_url: str = "http://127.0.0.1:3002"
+    safety_mcp_url: str = "http://127.0.0.1:3003"
+
+    @property
+    def demo_mode(self) -> bool:
+        """Single gate for all demo-only workflows."""
+        return self.runtime_mode == RuntimeMode.demo or self.enable_demo_mode
 
 
 settings = Settings()

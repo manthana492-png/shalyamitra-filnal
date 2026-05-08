@@ -23,11 +23,14 @@ Additional keywords:
 
 from __future__ import annotations
 
+import base64
 import re
 import time
 from dataclasses import dataclass
 from enum import Enum
 from typing import Optional
+
+import httpx
 
 from app.config import settings
 
@@ -99,8 +102,9 @@ class WakeWordDetector:
     """
 
     def __init__(self):
-        self._riva_kws_available = False
+        self._riva_kws_available = bool(settings.riva_http_base)
         self._openwakeword_available = False
+        self._oww_model = None
         self._consecutive_activations = 0
         self._last_activation_time = 0.0
         self._cooldown_seconds = 2.0  # Prevent re-triggering within 2s
@@ -164,8 +168,8 @@ class WakeWordDetector:
             if result and result.detected:
                 return result
 
-        # Tier 2: OpenWakeWord
-        if self._openwakeword_available:
+        # Tier 2: OpenWakeWord (lazy load when OPENWAKEWORD_ENABLED=true)
+        if settings.openwakeword_enabled:
             result = await self._try_openwakeword(audio_b64, codec, start)
             if result and result.detected:
                 return result
@@ -186,35 +190,112 @@ class WakeWordDetector:
         and detects a configured keyword ("Nael") in the audio stream.
         Latency: ~30-50ms.
         """
-        # TODO: Implement when Riva is deployed
-        # import riva.client
-        # auth = riva.client.Auth(uri=settings.riva_grpc_url)
-        # kws = riva.client.KWSService(auth)
-        # config = riva.client.StreamingRecognitionConfig(
-        #     config=riva.client.RecognitionConfig(
-        #         language_code="en-US",
-        #         keywords=["Nael"],
-        #         keyword_threshold=0.7,
-        #     )
-        # )
-        return None
+        try:
+            raw = base64.b64decode(audio_b64)
+            async with httpx.AsyncClient(timeout=2.0) as http:
+                resp = await http.post(
+                    f"{settings.riva_http_base.rstrip('/')}/kws/detect",
+                    content=raw,
+                    headers={"Content-Type": f"audio/{codec}", "Accept": "application/json"},
+                )
+            if resp.status_code != 200:
+                return None
+            blob = resp.json() if resp.content else {}
+            if not isinstance(blob, dict):
+                blob = {}
+            detected = bool(blob.get("detected") or blob.get("wake_word"))
+            if not detected:
+                return None
+            elapsed = (time.monotonic() - start) * 1000
+            return WakeWordResult(
+                detected=True,
+                word_type=WakeWordType.ACTIVATE,
+                keyword=str(blob.get("keyword") or "nael"),
+                confidence=float(blob.get("confidence") or 0.8),
+                engine_used=WakeWordEngine.RIVA_KWS,
+                latency_ms=elapsed,
+            )
+        except Exception:
+            self._riva_kws_available = False
+            return None
 
     async def _try_openwakeword(self, audio_b64: str, codec: str,
                                  start: float) -> Optional[WakeWordResult]:
         """
-        OpenWakeWord — open-source wake word detection.
+        OpenWakeWord — CPU keyword spotting before ASR.
 
-        Runs on CPU, ~100ms latency. Good accuracy for custom keywords.
-        https://github.com/dscripka/openWakeWord
+        Requires optional dependency `openwakeword` + models; enable with
+        OPENWAKEWORD_ENABLED=true. Default pretrained models are generic;
+        deploy custom "Nael" ONNX models for clinical accuracy.
         """
-        # TODO: Implement when OpenWakeWord is deployed
-        # import openwakeword
-        # model = openwakeword.Model(wakeword_models=["nael_v1"])
-        # prediction = model.predict(audio_data)
+        if not settings.openwakeword_enabled:
+            return None
+
+        try:
+            import numpy as np
+            from openwakeword.model import Model as OWWModel
+        except ImportError:
+            self._openwakeword_available = False
+            return None
+
+        if self._oww_model is None:
+            try:
+                self._oww_model = OWWModel()
+                self._openwakeword_available = True
+            except Exception:
+                self._openwakeword_available = False
+                self._oww_model = None
+                return None
+
+        try:
+            raw = base64.b64decode(audio_b64)
+            if codec in ("wav", "audio/wav") and raw.startswith(b"RIFF"):
+                raw = raw[44:]  # naive PCM strip — callers should prefer raw pcm16
+            if len(raw) < 8:
+                return None
+            pcm = np.frombuffer(raw, dtype=np.int16)
+            audio = pcm.astype(np.float32) / 32768.0
+        except Exception:
+            return None
+
+        step = 1280
+        thr = float(settings.openwakeword_threshold)
+        best = 0.0
+
+        for i in range(0, len(audio) - step + 1, step):
+            chunk = audio[i : i + step]
+            try:
+                scores = self._oww_model.predict(chunk)
+            except Exception:
+                continue
+            if isinstance(scores, dict):
+                for v in scores.values():
+                    if isinstance(v, (float, int)):
+                        best = max(best, float(v))
+            elif isinstance(scores, (float, int)):
+                best = max(best, float(scores))
+
+        if best >= thr:
+            elapsed = (time.monotonic() - start) * 1000
+            return WakeWordResult(
+                detected=True,
+                word_type=WakeWordType.ACTIVATE,
+                keyword="openwakeword_hit",
+                confidence=min(1.0, best),
+                engine_used=WakeWordEngine.OPENWAKEWORD,
+                latency_ms=elapsed,
+            )
+
         return None
 
     async def health_check(self) -> dict:
         """Check which wake word engines are available."""
+        try:
+            async with httpx.AsyncClient(timeout=2.0) as http:
+                r = await http.get(f"{settings.riva_http_base.rstrip('/')}/health")
+                self._riva_kws_available = r.status_code == 200
+        except Exception:
+            self._riva_kws_available = False
         return {
             "riva_kws": self._riva_kws_available,
             "openwakeword": self._openwakeword_available,

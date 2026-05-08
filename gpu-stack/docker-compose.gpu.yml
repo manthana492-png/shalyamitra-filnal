@@ -1,33 +1,54 @@
 # ══════════════════════════════════════════════════════════
-# ShalyaMitra GPU Stack — Docker Compose
+# ShalyaMitra GPU Stack — Lightning AI H100 (per-slot)
 # ══════════════════════════════════════════════════════════
-# Deployed on an H100 80GB instance for the duration of surgery.
-# Total VRAM budget: ~50-55GB (fits within 80GB with headroom).
+# Production deployment model:
+#   - Frontend  → Vercel      (always-on, free CDN)
+#   - Auth/DB   → Supabase    (always-on)
+#   - WebRTC    → LiveKit Cloud (always-on, pay-per-room-minute)
+#   - GPU stack → Lightning AI H100 (this file, per-slot only)
+#   - DNS proxy → Cloudflare  gpu.shalyamitra.quaasx108.com → this instance
 #
-# Start (default: LiveKit, agent, Qdrant, holoscan-bridge, etc.; NO local Nemotron):
+# Slot activation:
+#   1. Run scripts/slot-start.sh    (updates Cloudflare DNS + starts stack)
+#   2. Run scripts/slot-stop.sh     (clears DNS + shuts down)
+#
+# Start (default — cloud NIM, LiveKit Cloud, no local NIM):
 #   docker compose -f docker-compose.gpu.yml up -d --build
-# Optional NVIDIA on-GPU Riva + Holoscan (use after NGC + Riva init — see services/riva/README.md):
+# With NVIDIA Riva + Holoscan:
 #   COMPOSE_PROFILES=nvidia docker compose -f docker-compose.gpu.yml up -d
-# Optional: local NIM on GPU (large image + NGC; only if you need offline LLM):
+# With local offline NIM (no internet):
 #   docker compose -f docker-compose.gpu.yml --profile local-nim up -d
-# Stop:   docker compose -f docker-compose.gpu.yml down
 # ══════════════════════════════════════════════════════════
 
 services:
   # ═══════════════════════════════════════════════════════
-  # 1. LiveKit Server — WebRTC SFU
-  #    Handles all audio/video transport between:
-  #    - Android phone cameras → vision pipelines
-  #    - Bluetooth neckband mic → ASR
-  #    - TTS audio → neckband speaker
-  #    - Overlay video → theatre display
+  # 0. Nginx — Reverse Proxy (public entry-point)
+  #    Cloudflare → :80 → nginx → FastAPI :9000
+  #    Handles WebSocket upgrade + long-lived connections
+  # ═══════════════════════════════════════════════════════
+  nginx:
+    image: nginx:1.27-alpine
+    ports:
+      - "80:80"
+    volumes:
+      - ./services/nginx/nginx.conf:/etc/nginx/nginx.conf:ro
+    depends_on:
+      - agent-orchestrator
+    restart: unless-stopped
+
+  # ═══════════════════════════════════════════════════════
+  # 1. LiveKit (self-hosted — optional, local dev / offline)
+  #    Production uses LiveKit Cloud (no container needed).
+  #    Activate with: --profile livekit-local
   # ═══════════════════════════════════════════════════════
   livekit:
+    profiles:
+      - livekit-local
     image: livekit/livekit-server:v1.8
     ports:
-      - "7880:7880"   # HTTP + WS
-      - "7881:7881"   # RTC (UDP/TCP)
-      - "7882:7882"   # TURN/TLS
+      - "7880:7880"
+      - "7881:7881"
+      - "7882:7882"
     environment:
       - LIVEKIT_KEYS=${LIVEKIT_API_KEY:-devkey}:${LIVEKIT_API_SECRET:-devsecret}
       - LIVEKIT_ENABLE_WEBSOCKET_RELAY=true
@@ -108,6 +129,10 @@ services:
       - "8080:8080"
     volumes:
       - fish_voices:/app/voices
+    environment:
+      - OPENROUTER_API_KEY=${OPENROUTER_API_KEY:-}
+      - OPENROUTER_BASE_URL=${OPENROUTER_BASE_URL:-https://openrouter.ai/api/v1}
+      - ALLOW_AUDIO_PLACEHOLDER=${ALLOW_AUDIO_PLACEHOLDER:-false}
     restart: unless-stopped
 
   # ═══════════════════════════════════════════════════════
@@ -118,6 +143,8 @@ services:
     build: ./services/piper
     ports:
       - "8090:8090"
+    environment:
+      - ALLOW_AUDIO_PLACEHOLDER=${ALLOW_AUDIO_PLACEHOLDER:-false}
     restart: unless-stopped
 
   # ═══════════════════════════════════════════════════════
@@ -132,6 +159,43 @@ services:
       - VIDEO_INGEST_MODE=${VIDEO_INGEST_MODE:-webrtc}
       - AGENT_BASE_URL=http://agent-orchestrator:9000
       - INTERNAL_BUS_TOKEN=${INTERNAL_BUS_TOKEN:-}
+    restart: unless-stopped
+
+  # ═══════════════════════════════════════════════════════
+  # 6b. NemoClaw MCP tool servers (Marma / Drug / Safety)
+  #     HTTP /tools/call — wired via MARMA_MCP_URL etc. on agent-orchestrator
+  # ═══════════════════════════════════════════════════════
+  nemoclaw-marma:
+    build:
+      context: ..
+      dockerfile: services/nemoclaw-mcp/Dockerfile
+    command: ["python", "/w/nemoclaw/mcp_servers/marma_server.py"]
+    environment:
+      - MCP_PORT=3001
+    ports:
+      - "3001:3001"
+    restart: unless-stopped
+
+  nemoclaw-drug:
+    build:
+      context: ..
+      dockerfile: services/nemoclaw-mcp/Dockerfile
+    command: ["python", "/w/nemoclaw/mcp_servers/drug_server.py"]
+    environment:
+      - MCP_PORT=3002
+    ports:
+      - "3002:3002"
+    restart: unless-stopped
+
+  nemoclaw-safety:
+    build:
+      context: ..
+      dockerfile: services/nemoclaw-mcp/Dockerfile
+    command: ["python", "/w/nemoclaw/mcp_servers/safety_server.py"]
+    environment:
+      - MCP_PORT=3003
+    ports:
+      - "3003:3003"
     restart: unless-stopped
 
   # ═══════════════════════════════════════════════════════
@@ -167,9 +231,10 @@ services:
       - ./services/holoscan:/app/pipelines
       - holoscan_models:/app/models
     environment:
-      - LIVEKIT_URL=ws://livekit:7880
-      - LIVEKIT_API_KEY=${LIVEKIT_API_KEY:-devkey}
-      - LIVEKIT_API_SECRET=${LIVEKIT_API_SECRET:-devsecret}
+      # LiveKit Cloud (production) — wss://your-project.livekit.cloud
+      - LIVEKIT_URL=${LIVEKIT_URL:-wss://your-project.livekit.cloud}
+      - LIVEKIT_API_KEY=${LIVEKIT_API_KEY:-}
+      - LIVEKIT_API_SECRET=${LIVEKIT_API_SECRET:-}
       - AGENT_BUS_URL=http://agent-orchestrator:9000
     restart: unless-stopped
 
@@ -186,6 +251,12 @@ services:
       - "9000:9000"
     environment:
       - GPU_PROVIDER=local
+      - RUNTIME_MODE=${RUNTIME_MODE:-production}
+      - ENABLE_DEMO_MODE=${ENABLE_DEMO_MODE:-false}
+      - DEV_AUTH_BYPASS=${DEV_AUTH_BYPASS:-false}
+      - DEV_AUTH_BYPASS_SUB=${DEV_AUTH_BYPASS_SUB:-00000000-0000-0000-0000-000000000001}
+      - DEV_AUTH_BYPASS_EMAIL=${DEV_AUTH_BYPASS_EMAIL:-owner@localhost}
+      - DEV_AUTH_BYPASS_ROLE=${DEV_AUTH_BYPASS_ROLE:-admin}
       # Cloud NIM (default). For local NIM container, add profile local-nim and set
       # NVIDIA_NIM_BASE_URL=http://nim:8000/v1
       - NVIDIA_NIM_BASE_URL=${NVIDIA_NIM_BASE_URL:-https://integrate.api.nvidia.com/v1}
@@ -195,7 +266,8 @@ services:
       - PIPER_URL=http://piper:8090
       - QDRANT_URL=http://qdrant:6333
       - REDIS_URL=redis://redis:6379/0
-      - LIVEKIT_URL=ws://livekit:7880
+      # LiveKit Cloud — same URL used by Holoscan + agent
+      - LIVEKIT_URL=${LIVEKIT_URL:-wss://your-project.livekit.cloud}
       - LIVEKIT_API_KEY=${LIVEKIT_API_KEY:-}
       - LIVEKIT_API_SECRET=${LIVEKIT_API_SECRET:-}
       - OPENROUTER_API_KEY=${OPENROUTER_API_KEY:-}
@@ -203,12 +275,23 @@ services:
       - HOLOSCAN_BASE_URL=${HOLOSCAN_BASE_URL:-http://holoscan-bridge:9100}
       - VIDEO_INGEST_MODE=${VIDEO_INGEST_MODE:-webrtc}
       - INTERNAL_BUS_TOKEN=${INTERNAL_BUS_TOKEN:-}
+      - NEMOCLAW_CONFIG_DIR=/nemoclaw/config
+      - MARMA_MCP_URL=http://nemoclaw-marma:3001
+      - DRUG_MCP_URL=http://nemoclaw-drug:3002
+      - SAFETY_MCP_URL=http://nemoclaw-safety:3003
+      - NEMOCLAW_AUDIT_LOG_PATH=${NEMOCLAW_AUDIT_LOG_PATH:-}
+    volumes:
+      - ../nemoclaw:/nemoclaw/config:ro
     depends_on:
+      - nemoclaw-marma
+      - nemoclaw-drug
+      - nemoclaw-safety
       - fish-speech
       - piper
       - holoscan-bridge
       - qdrant
       - redis
+      # nginx depends on agent-orchestrator, so agent boots first
     command: >
       uvicorn app.main:app
       --host 0.0.0.0 --port 9000

@@ -10,8 +10,18 @@ Tools:
   - list_all_drugs() → all 16 drugs in database
 """
 
-import sys, os
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', '..'))
+import sys
+import os
+
+
+def _ensure_backend_on_path() -> None:
+    here = os.path.dirname(os.path.abspath(__file__))
+    backend = os.path.abspath(os.path.join(here, "..", "..", "backend"))
+    if backend not in sys.path:
+        sys.path.insert(0, backend)
+
+
+_ensure_backend_on_path()
 
 import json
 from http.server import HTTPServer, BaseHTTPRequestHandler
@@ -115,6 +125,16 @@ def execute_tool(tool_name: str, args: dict) -> dict:
 
 
 class MCPHandler(BaseHTTPRequestHandler):
+    def do_GET(self):
+        if self.path in ("/health", "/healthz"):
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.end_headers()
+            self.wfile.write(b'{"status":"ok","service":"nemoclaw-drug-mcp"}')
+        else:
+            self.send_response(404)
+            self.end_headers()
+
     def do_POST(self):
         content_len = int(self.headers.get("Content-Length", 0))
         body = json.loads(self.rfile.read(content_len))

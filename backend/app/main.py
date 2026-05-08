@@ -12,13 +12,25 @@ from __future__ import annotations
 
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 
 from app.config import settings
 from app.api import sessions, preop, postop, profiles, admin, voice, camera, marma, safety
-from app.api import internal_holoscan
+from app.api import internal_holoscan, internal_camera, ops_metrics
 from app.ws.realtime import router as ws_router
+from app.ws.rtc_signaling import router as rtc_router
+
+
+async def _display_fanout(event) -> None:
+    """Route orchestrator display_* events → per-session WebSocket fan-out."""
+    from app.ws.display_wire import enrich_display_for_wire
+    from app.session.lifecycle import get_session_manager
+
+    ev = await enrich_display_for_wire(event)
+    sid = ev.session_id
+    if sid:
+        await get_session_manager()._broadcast_event(sid, ev)
 
 
 @asynccontextmanager
@@ -32,12 +44,16 @@ async def lifespan(app: FastAPI):
     from app.safety.privacy_router import get_privacy_router
 
     orch = get_orchestrator()
+    orch.add_display_callback(_display_fanout)
     stats = get_marma_stats()
-    _ = get_phi_middleware()        # warm up PHI engine
-    __ = get_guardrails_engine()    # warm up guardrails
-    pr = get_privacy_router()       # warm up privacy router
+    _ = get_phi_middleware(), get_guardrails_engine(), get_privacy_router()
+
+    from app.nemoclaw.config_bundle import get_nemoclaw_summary
+
+    nc = get_nemoclaw_summary()
 
     print(f"[START] {settings.app_name} v{settings.app_version} starting")
+    print(f"   Runtime      : {settings.runtime_mode.value} (demo={'on' if settings.demo_mode else 'off'})")
     print(f"   GPU provider : {settings.gpu_provider.value}")
     print(f"   Debug mode   : {settings.debug}")
     print(f"   Agents       : {len(orch.agents)} pillars (ShalyaBus)")
@@ -57,9 +73,18 @@ async def lifespan(app: FastAPI):
         f"TTS={'on' if settings.riva_tts_enable else 'off'} | "
         f"NMT={'on' if settings.riva_nmt_enable else 'off'}"
     )
-    print(f"   MCP Servers  : marma(3001) drug(3002) safety(3003)")
+    print(
+        f"   NemoClaw      : {'on' if settings.nemoclaw_enabled else 'off'} "
+        f"| bundle={nc.get('sandbox_count', 0)} sandboxes | "
+        f"policy_yaml=v{nc.get('openshell_policy_version') or '?'}"
+    )
+    print(
+        f"   NemoClaw MCP  : marma {settings.marma_mcp_url} | "
+        f"drug {settings.drug_mcp_url} | safety {settings.safety_mcp_url}"
+    )
     yield
     # ── Shutdown ──────────────────────────────────────────
+    orch.remove_display_callback(_display_fanout)
     print(f"[STOP] {settings.app_name} shutting down")
 
 
@@ -73,6 +98,18 @@ app = FastAPI(
     ),
     lifespan=lifespan,
 )
+
+app.state.metrics = {"requests": 0, "ws_live_sessions": 0}
+
+
+@app.middleware("http")
+async def metrics_middleware(request: Request, call_next):
+    response = await call_next(request)
+    m = getattr(request.app.state, "metrics", None)
+    if isinstance(m, dict):
+        m["requests"] = int(m.get("requests", 0)) + 1
+    return response
+
 
 # ── CORS ──────────────────────────────────────────────────
 app.add_middleware(
@@ -93,14 +130,21 @@ app.include_router(voice.router, prefix="/api/voice", tags=["Voice"])
 app.include_router(camera.router, prefix="/api/camera", tags=["Camera"])
 app.include_router(marma.router, prefix="/api/marma", tags=["Marma Knowledge"])
 app.include_router(safety.router, prefix="/api/safety", tags=["Safety & Compliance"])
+app.include_router(ops_metrics.router, prefix="/api/ops", tags=["Operations"])
 app.include_router(
     internal_holoscan.router,
     prefix="/api/internal",
     tags=["Internal — Holoscan"],
 )
+app.include_router(
+    internal_camera.router,
+    prefix="/api/internal",
+    tags=["Internal — Camera"],
+)
 
 # ── WebSocket Realtime ────────────────────────────────────
 app.include_router(ws_router)
+app.include_router(rtc_router)
 
 
 # ── Health Check ──────────────────────────────────────────
@@ -111,6 +155,10 @@ async def healthz():
         "service": settings.app_name,
         "version": settings.app_version,
         "gpu_provider": settings.gpu_provider.value,
+        "holoscan_bridge": settings.holoscan_base_url or None,
+        "video_ingest_mode": settings.video_ingest_mode,
+        "runtime_mode": settings.runtime_mode.value,
+        "demo_mode": settings.demo_mode,
     }
 
 

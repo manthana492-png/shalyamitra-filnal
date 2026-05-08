@@ -224,7 +224,7 @@ Keep it professional and concise."""
             resp = await http.post(
                 f"{settings.openrouter_base_url}/chat/completions",
                 headers={"Authorization": f"Bearer {settings.openrouter_api_key}",
-                         "HTTP-Referer": "https://shalyamitra.dev",
+                         "HTTP-Referer": "https://shalyamitra.quaasx108.com",
                          "X-Title": "ShalyaMitra Chronicler"},
                 json={"model": settings.scholar_model,
                       "messages": [{"role": "user", "content": prompt}],

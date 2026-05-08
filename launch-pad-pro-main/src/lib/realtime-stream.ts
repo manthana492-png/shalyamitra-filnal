@@ -1,21 +1,9 @@
 /**
  * useRealtimeStream — backend-agnostic Nael event stream.
  *
- * Selects between three sources, automatically falling back:
- *
- *   1. "live"     — connect to FastAPI backend WebSocket (/ws/realtime)
- *                   Receives real NIM API responses + simulated vitals
- *   2. "mock"     — connect to FastAPI mock-gpu WebSocket (/ws/mock-gpu)
- *                   Server-side scripted feed, proves WS pipeline end-to-end
- *   3. "scripted" — local in-browser playback (DEMO_EVENTS), zero network
- *
- * Selection rule:
- *   - Caller passes a preferred `source`
- *   - If "live" / "mock" fails to connect or returns code "demo_mode", we
- *     transparently fall back to "scripted" so the demo never breaks
- *
- * The handler shape matches `nael-stream.ts` so SessionConsole consumes both
- * adapters interchangeably.
+ * Canonical runtime contract:
+ *   - Production path: "live" only, backed by `/ws/realtime`
+ *   - Demo path: "scripted" only, and only when explicitly enabled by caller
  */
 
 import { useEffect, useRef, useState } from "react";
@@ -23,7 +11,7 @@ import { useScriptedSession, type StreamMode, type StreamHandlers } from "./nael
 import { DEMO_DURATION } from "./demo-session";
 import type { ServerEvent } from "./gpu-adapter";
 
-export type RealtimeSource = "scripted" | "mock" | "live";
+export type RealtimeSource = "scripted" | "live";
 export type RealtimeStatus = "idle" | "connecting" | "connected" | "scripted-fallback" | "error";
 
 export type UseRealtimeStreamOpts = {
@@ -32,6 +20,7 @@ export type UseRealtimeStreamOpts = {
   mode: StreamMode;
   sessionId?: string;
   handlers: StreamHandlers;
+  allowDemoScripted?: boolean;
 };
 
 // Connect to the FastAPI backend (not Supabase edge functions)
@@ -43,9 +32,9 @@ function wsUrl(endpoint: string): string {
 }
 
 export function useRealtimeStream(opts: UseRealtimeStreamOpts) {
-  const { source, running, mode, sessionId, handlers } = opts;
+  const { source, running, mode, sessionId, handlers, allowDemoScripted = false } = opts;
   const [status, setStatus] = useState<RealtimeStatus>("idle");
-  const [resolvedSource, setResolvedSource] = useState<RealtimeSource>(source);
+  const [resolvedSource, setResolvedSource] = useState<RealtimeSource>("live");
   const [elapsed, setElapsed] = useState(0);
   const handlersRef = useRef(handlers);
   handlersRef.current = handlers;
@@ -53,53 +42,51 @@ export function useRealtimeStream(opts: UseRealtimeStreamOpts) {
 
   // Local scripted fallback (only ticks when resolvedSource is "scripted")
   const scripted = useScriptedSession({
-    running: running && resolvedSource === "scripted",
+    running: running && source === "scripted" && allowDemoScripted,
     mode,
     handlers,
   });
 
-  // Mirror elapsed when running on scripted
   useEffect(() => {
-    if (resolvedSource === "scripted") setElapsed(scripted.elapsed);
-  }, [scripted.elapsed, resolvedSource]);
-
-  // Connect / disconnect WS for live or mock
-  useEffect(() => {
-    if (!running || source === "scripted") {
+    if (source === "scripted" && allowDemoScripted) {
       setResolvedSource("scripted");
+      setStatus("connected");
+      setElapsed(scripted.elapsed);
+      return;
+    }
+    if (source === "scripted" && !allowDemoScripted) {
+      setStatus("error");
+      setResolvedSource("live");
+    }
+  }, [source, allowDemoScripted, scripted.elapsed]);
+
+  // Connect / disconnect WS for live mode
+  useEffect(() => {
+    if (!running || source !== "live") {
       return;
     }
 
     let cancelled = false;
     setStatus("connecting");
+    setResolvedSource("live");
 
-    // Route to FastAPI backend endpoints
-    const endpoint = source === "mock" ? "/ws/mock-gpu" : "/ws/realtime";
-    const url = wsUrl(endpoint);
+    const url = wsUrl("/ws/realtime");
 
     let ws: WebSocket;
     try {
       ws = new WebSocket(url);
     } catch {
       if (!cancelled) {
-        setStatus("scripted-fallback");
-        setResolvedSource("scripted");
+        setStatus("error");
       }
       return;
     }
     wsRef.current = ws;
     let startedAt = Date.now();
 
-    const fallback = () => {
-      if (cancelled) return;
-      setStatus("scripted-fallback");
-      setResolvedSource("scripted");
-    };
-
     ws.onopen = () => {
       if (cancelled) return;
       setStatus("connected");
-      setResolvedSource(source);
       startedAt = Date.now();
       try {
         // Send auth message (backend expects this as first message within 5s)
@@ -107,7 +94,7 @@ export function useRealtimeStream(opts: UseRealtimeStreamOpts) {
         ws.send(JSON.stringify({
           type: "auth",
           token: token,
-          sessionId: sessionId ?? "demo",
+          sessionId: sessionId ?? "",
         }));
         // Send initial mode control
         ws.send(JSON.stringify({ type: "control", mode }));
@@ -119,9 +106,9 @@ export function useRealtimeStream(opts: UseRealtimeStreamOpts) {
       try {
         const evt = JSON.parse(typeof e.data === "string" ? e.data : "") as ServerEvent;
 
-        // If backend says "demo_mode" (no GPU), fall back to scripted
-        if (evt.type === "error" && evt.code === "demo_mode") {
-          fallback();
+        if (evt.type === "error") {
+          setStatus("error");
+          try { ws.close(); } catch { /* noop */ }
           return;
         }
 
@@ -169,11 +156,12 @@ export function useRealtimeStream(opts: UseRealtimeStreamOpts) {
       } catch { /* ignore parse errors */ }
     };
 
-    ws.onerror = () => fallback();
-    ws.onclose = (e) => {
+    ws.onerror = () => {
+      if (!cancelled) setStatus("error");
+    };
+    ws.onclose = () => {
       if (cancelled) return;
-      // Normal close after demo_mode handshake → fallback already triggered.
-      if (status === "connecting") fallback();
+      setStatus("error");
     };
 
     // Cleanup
@@ -183,7 +171,7 @@ export function useRealtimeStream(opts: UseRealtimeStreamOpts) {
       wsRef.current = null;
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [running, source, sessionId]);
+  }, [running, source, sessionId, mode]);
 
   // Push mode changes to the live socket
   useEffect(() => {
@@ -194,13 +182,15 @@ export function useRealtimeStream(opts: UseRealtimeStreamOpts) {
   }, [mode]);
 
   const reset = () => {
-    scripted.reset();
+    if (source === "scripted" && allowDemoScripted) {
+      scripted.reset();
+    }
     setElapsed(0);
   };
 
   return {
     elapsed,
-    total: DEMO_DURATION,
+    total: source === "scripted" ? DEMO_DURATION : 0,
     status,
     resolvedSource,
     reset,

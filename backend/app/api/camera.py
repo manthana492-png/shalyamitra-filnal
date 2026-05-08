@@ -18,6 +18,7 @@ from pydantic import BaseModel
 
 from app.auth.jwt import get_current_user, AuthUser
 from app.camera.manager import get_camera_manager, ConnectionMethod
+from app.config import settings
 from app.camera.vision_orchestrator import get_vision_orchestrator
 
 router = APIRouter()
@@ -46,9 +47,7 @@ async def camera_status(user: AuthUser = Depends(get_current_user)):
     Shows connection method, streaming status, frame count, and errors.
     """
     mgr = get_camera_manager()
-    return {
-        "cameras": mgr.get_all_status(),
-        "connection_methods": [
+    methods = [
             {
                 "id": "livekit",
                 "name": "LiveKit SDK (Android App)",
@@ -73,14 +72,17 @@ async def camera_status(user: AuthUser = Depends(get_current_user)):
                 "description": "Connect IP camera or GoPro via Wi-Fi RTSP stream.",
                 "requires_app": False,
             },
+    ]
+    if settings.demo_mode:
+        methods.append(
             {
                 "id": "mock",
                 "name": "Demo / Test Pattern",
-                "description": "Simulated camera feed for testing.",
+                "description": "Simulated camera feed for demo/testing.",
                 "requires_app": False,
-            },
-        ],
-    }
+            }
+        )
+    return {"cameras": mgr.get_all_status(), "connection_methods": methods}
 
 
 @router.post("/connect")
@@ -103,6 +105,8 @@ async def connect_camera(
         method = ConnectionMethod(body.method)
     except ValueError:
         raise HTTPException(status_code=400, detail=f"Unknown method: {body.method}")
+    if method == ConnectionMethod.MOCK and not settings.demo_mode:
+        raise HTTPException(status_code=403, detail="Mock camera method is only available in demo mode")
 
     result = await mgr.connect_camera(
         camera_id=body.camera_id,
@@ -111,7 +115,7 @@ async def connect_camera(
         room_name=body.room_name or "surgery_room",
         device_path=body.device_path,
         rtsp_url=body.rtsp_url,
-        base_url=body.base_url or "https://shalyamitra.dev",
+        base_url=body.base_url or "https://shalyamitra.quaasx108.com",
     )
 
     if "error" in result:
@@ -198,7 +202,7 @@ async def get_camera_qr(
     return {
         "camera_id": camera_id,
         "label": status.get("label", camera_id),
-        "join_url": f"https://shalyamitra.dev/camera/join/{join_code}?cam={camera_id}",
+        "join_url": f"https://shalyamitra.quaasx108.com/camera/join/{join_code}?cam={camera_id}",
         "join_code": join_code,
         "instructions": f"Scan this QR code with the phone for {status.get('label', camera_id)}. Allow camera access when prompted.",
     }

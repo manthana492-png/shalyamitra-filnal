@@ -13,8 +13,10 @@ services:
     ports:
       - "8000:8000"
     environment:
-      - DEBUG=true
-      - GPU_PROVIDER=demo
+      - DEBUG=false
+      - RUNTIME_MODE=production
+      - ENABLE_DEMO_MODE=false
+      - GPU_PROVIDER=local
       - SUPABASE_URL=${SUPABASE_URL:-}
       - SUPABASE_ANON_KEY=${SUPABASE_ANON_KEY:-}
       - SUPABASE_JWT_SECRET=${SUPABASE_JWT_SECRET:-}

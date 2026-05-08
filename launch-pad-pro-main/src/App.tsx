@@ -13,6 +13,7 @@ import Sessions from "./pages/Sessions.tsx";
 import NewSession from "./pages/NewSession.tsx";
 import DomainSelect from "./pages/DomainSelect.tsx";
 import SessionConsole from "./pages/SessionConsole.tsx";
+import DemoConsole from "./pages/DemoConsole.tsx";
 import PostOp from "./pages/PostOp.tsx";
 import PreOpView from "./pages/PreOpView.tsx";
 import SurgeonProfile from "./pages/SurgeonProfile.tsx";
@@ -39,6 +40,7 @@ const App = () => (
             <Route path="/sessions/new" element={<ProtectedRoute><NewSession /></ProtectedRoute>} />
             <Route path="/sessions/:id/preop" element={<ProtectedRoute><PreOpView /></ProtectedRoute>} />
             <Route path="/sessions/:id/console" element={<ProtectedRoute><SessionConsole /></ProtectedRoute>} />
+            <Route path="/demo" element={<DemoConsole />} />
             <Route path="/sessions/:id/post-op" element={<ProtectedRoute><PostOp /></ProtectedRoute>} />
             <Route path="/settings/profile" element={<ProtectedRoute><SurgeonProfile /></ProtectedRoute>} />
             <Route path="/admin/audit" element={<ProtectedRoute requireRole="admin"><AdminAudit /></ProtectedRoute>} />

@@ -1,12 +1,11 @@
 /**
  * WebRTC / Camera adapter.
  *
- * Three sources per camera, selectable at runtime via the per-tile toggle:
+ * Sources per camera:
  *
- *   1. "placeholder" — animated holographic chrome (no MediaStream)
- *   2. "webcam"      — getUserMedia (laptop webcam / capture card)
- *   3. "webrtc"      — RTCPeerConnection negotiated via aria-realtime edge
- *                       function (relayed to the GPU backend / Triton overlays)
+ *   1. "webcam"      — getUserMedia (laptop webcam / capture card)
+ *   2. "webrtc"      — RTCPeerConnection negotiated via backend `/ws/rtc`
+ *   3. "placeholder" — demo-only visual fallback
  *
  * The negotiation contract over the WebSocket is intentionally simple so any
  * GPU host (Lightning AI, RunPod, self-hosted) can implement it:
@@ -32,11 +31,20 @@ export type CameraStreamHandle = {
   close: () => void;
 };
 
-const ANON_KEY = import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY as string;
-const PROJECT_ID = import.meta.env.VITE_SUPABASE_PROJECT_ID as string;
+const DEMO_MODE_ENABLED = String(import.meta.env.VITE_DEMO_MODE || "").toLowerCase() === "true";
 
-function rtcSignalUrl() {
-  return `wss://${PROJECT_ID}.functions.supabase.co/aria-realtime?apikey=${encodeURIComponent(ANON_KEY)}`;
+/** Prefer ShalyaMitra backend `/ws/rtc` when `VITE_BACKEND_URL` is configured. */
+function rtcBackendWsUrl(id: CameraId, sessionId: string | undefined): string | null {
+  const raw = import.meta.env.VITE_BACKEND_URL as string | undefined;
+  if (!raw?.trim()) return null;
+  try {
+    const u = new URL(raw.replace(/\/$/, ""));
+    const wsProto = u.protocol === "https:" ? "wss:" : "ws:";
+    const sid = sessionId ?? "demo";
+    return `${wsProto}//${u.host}/ws/rtc?sessionId=${encodeURIComponent(sid)}&role=viewer&camera=${encodeURIComponent(id)}`;
+  } catch {
+    return null;
+  }
 }
 
 async function connectWebcam(id: CameraId): Promise<CameraStreamHandle> {
@@ -83,17 +91,18 @@ async function connectWebRtc(id: CameraId, sessionId: string | undefined): Promi
     // We only want to *receive* video on this PC.
     pc.addTransceiver("video", { direction: "recvonly" });
 
-    ws = new WebSocket(rtcSignalUrl());
+    const backendWs = rtcBackendWsUrl(id, sessionId);
+    if (!backendWs) {
+      handle.status = "offline";
+      return handle;
+    }
+    ws = new WebSocket(backendWs);
 
     await new Promise<void>((resolve, reject) => {
       ws!.onopen = () => resolve();
       ws!.onerror = () => reject(new Error("ws_error"));
       setTimeout(() => reject(new Error("ws_timeout")), 4000);
     });
-
-    ws.send(JSON.stringify({
-      type: "auth", token: ANON_KEY, sessionId: sessionId ?? "demo",
-    }));
 
     pc.onicecandidate = (e) => {
       if (e.candidate && ws?.readyState === WebSocket.OPEN) {
@@ -139,5 +148,8 @@ export async function connectCamera(
 ): Promise<CameraStreamHandle> {
   if (source === "webcam") return connectWebcam(id);
   if (source === "webrtc") return connectWebRtc(id, sessionId);
+  if (!DEMO_MODE_ENABLED) {
+    return { id, source: "placeholder", stream: null, status: "error", close: () => {} };
+  }
   return { id, source: "placeholder", stream: null, status: "idle", close: () => {} };
 }

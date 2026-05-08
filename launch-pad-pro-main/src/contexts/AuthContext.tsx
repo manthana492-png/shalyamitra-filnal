@@ -3,6 +3,9 @@ import { supabase } from "@/integrations/supabase/client";
 import type { Session, User } from "@supabase/supabase-js";
 
 export type AppRole = "admin" | "surgeon" | "anaesthetist";
+const DEV_AUTH_BYPASS = String(import.meta.env.VITE_DEV_AUTH_BYPASS || "false").toLowerCase() === "true";
+const DEV_OWNER_EMAIL = String(import.meta.env.VITE_DEV_OWNER_EMAIL || "owner@localhost");
+const DEV_OWNER_ID = String(import.meta.env.VITE_DEV_OWNER_ID || "00000000-0000-0000-0000-000000000001");
 
 export type Profile = {
   id: string;
@@ -42,6 +45,31 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   };
 
   useEffect(() => {
+    if (DEV_AUTH_BYPASS) {
+      const devUser = {
+        id: DEV_OWNER_ID,
+        email: DEV_OWNER_EMAIL,
+        aud: "authenticated",
+        role: "authenticated",
+        app_metadata: { provider: "email", providers: ["email"] },
+        user_metadata: { full_name: "Owner Dev", role: "admin" },
+        created_at: new Date().toISOString(),
+      } as User;
+      setSession(null);
+      setUser(devUser);
+      setProfile({
+        id: DEV_OWNER_ID,
+        user_id: DEV_OWNER_ID,
+        full_name: "Owner Dev",
+        title: "Dr.",
+        hospital: "Local Dev",
+        avatar_url: null,
+      });
+      setRoles(["admin"]);
+      setLoading(false);
+      return;
+    }
+
     // Set listener FIRST
     const { data: sub } = supabase.auth.onAuthStateChange((_event, sess) => {
       setSession(sess);
@@ -70,10 +98,12 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   }, []);
 
   const refresh = async () => {
+    if (DEV_AUTH_BYPASS) return;
     if (user) await loadProfileAndRoles(user.id);
   };
 
   const signOut = async () => {
+    if (DEV_AUTH_BYPASS) return;
     await supabase.auth.signOut();
   };
 

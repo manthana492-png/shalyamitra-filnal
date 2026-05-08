@@ -28,12 +28,31 @@ router = APIRouter()
 _sessions: dict[str, dict] = {}
 
 
+def _ensure_demo_sessions_enabled() -> None:
+    if not settings.demo_mode:
+        raise HTTPException(
+            status_code=503,
+            detail=(
+                "Backend in-memory session APIs are disabled in production runtime. "
+                "Use canonical Supabase session storage."
+            ),
+        )
+
+
+def peek_session_record(session_id: str) -> Optional[dict]:
+    """Read-only dev helper for Scholar / GPU helpers (no HTTP auth)."""
+    if not settings.demo_mode:
+        return None
+    return _sessions.get(session_id)
+
+
 @router.post("/", response_model=dict, status_code=201)
 async def create_session(
     body: SessionCreate,
     user: AuthUser = Depends(get_current_user),
 ):
     """Create a new surgery session."""
+    _ensure_demo_sessions_enabled()
     from uuid import uuid4
     from datetime import datetime, timezone
 
@@ -61,6 +80,7 @@ async def get_session(
     user: AuthUser = Depends(get_current_user),
 ):
     """Get a surgery session by ID."""
+    _ensure_demo_sessions_enabled()
     session = _sessions.get(session_id)
     if not session:
         raise HTTPException(status_code=404, detail="Session not found")
@@ -74,6 +94,7 @@ async def update_session(
     user: AuthUser = Depends(get_current_user),
 ):
     """Update session status, mode, timestamps."""
+    _ensure_demo_sessions_enabled()
     session = _sessions.get(session_id)
     if not session:
         raise HTTPException(status_code=404, detail="Session not found")
@@ -96,6 +117,7 @@ async def list_sessions(
     status: Optional[str] = None,
 ):
     """List sessions for the current user."""
+    _ensure_demo_sessions_enabled()
     user_id = str(user.sub)
     results = [
         s for s in _sessions.values()
@@ -121,6 +143,7 @@ async def start_session(
       2. Starts pre-op (Scholar + Oracle)
       3. Starts intra-op (Vision + Audio + all 11 agents)
     """
+    _ensure_demo_sessions_enabled()
     from app.session.lifecycle import get_session_manager
 
     session = _sessions.get(session_id)
@@ -170,6 +193,7 @@ async def end_session(
     End a surgery session — generates post-op report.
     Stops vision/audio pipelines and triggers Chronicler.
     """
+    _ensure_demo_sessions_enabled()
     from app.session.lifecycle import get_session_manager
 
     session = _sessions.get(session_id)
@@ -193,6 +217,7 @@ async def session_health(
     user: AuthUser = Depends(get_current_user),
 ):
     """Get live health status of an active session."""
+    _ensure_demo_sessions_enabled()
     from app.session.lifecycle import get_session_manager
     from app.camera.vision_orchestrator import get_vision_orchestrator
 

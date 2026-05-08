@@ -217,7 +217,7 @@ class CameraManager:
         self._join_codes[cam.camera_id.value] = join_code
 
         # The frontend serves a lightweight camera-sharing page at this URL
-        base_url = kwargs.get("base_url", "https://shalyamitra.dev")
+        base_url = kwargs.get("base_url", "https://shalyamitra.quaasx108.com")
         join_url = f"{base_url}/camera/join/{join_code}?cam={cam.camera_id.value}"
 
         cam.webrtc_peer_id = join_code

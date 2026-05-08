@@ -188,6 +188,7 @@ async def audio_health(user: AuthUser = Depends(get_current_user)):
     asr_health = asr.get_health()
 
     tts = get_tts_router()
+    wake_health = await get_wake_word_detector().health_check()
 
     return {
         "asr": {
@@ -219,8 +220,8 @@ async def audio_health(user: AuthUser = Depends(get_current_user)):
             "video_ingest_mode": settings.video_ingest_mode,
         },
         "wake_word": {
-            "riva_kws": False,       # Not yet deployed
-            "openwakeword": False,   # Not yet deployed
-            "text_match": True,      # Always available
+            "riva_kws": bool(wake_health.get("riva_kws")),
+            "openwakeword": bool(wake_health.get("openwakeword")),
+            "text_match": bool(wake_health.get("text_match")),
         },
     }

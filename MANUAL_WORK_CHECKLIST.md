@@ -278,7 +278,7 @@ npx vercel --prod
 
 # Option 2: Docker (full stack)
 # Update CORS_ORIGINS in .env:
-CORS_ORIGINS=["https://shalyamitra.dev","https://app.shalyamitra.dev"]
+CORS_ORIGINS=["https://shalyamitra.quaasx108.com","https://gpu.shalyamitra.quaasx108.com"]
 ```
 
 ### 14. Camera Hardware Setup (~30 min per camera)

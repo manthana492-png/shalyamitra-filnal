@@ -21,6 +21,7 @@ The orchestrator:
 from __future__ import annotations
 
 import asyncio
+import base64
 import time
 from dataclasses import dataclass
 from enum import Enum
@@ -77,6 +78,7 @@ class VisionOrchestrator:
         self._event_callback: Optional[Any] = None
         self._total_processed = 0
         self._running = False
+        self._active_session_id: str = ""
 
     def set_event_callback(self, callback):
         """Set callback to send vision events to agent orchestrator."""
@@ -85,22 +87,23 @@ class VisionOrchestrator:
     async def start(self, session_id: str):
         """Start vision processing for a surgery session."""
         self._running = True
+        self._active_session_id = session_id
 
-        # Step 1: Probe Holoscan
+        # Dual-path: keep cloud/VLM fallback analysing whilst Holoscan handles GPU path.
+        self._fallback.set_result_callback(
+            lambda result: self._handle_vision_result(result, session_id)
+        )
+        await self._fallback.start()
+
+        # Probe Holoscan HTTP bridge
         self._holoscan_available = await self._probe_holoscan()
 
         if self._holoscan_available:
             self._mode = PipelineMode.HOLOSCAN_LIVE
-            print(f"[VISION] Holoscan available — LIVE mode")
+            print("[VISION] Holoscan available — LIVE mode + fallback analyser active")
         else:
             self._mode = PipelineMode.FALLBACK_VLM
-            print(f"[VISION] Holoscan unavailable — FALLBACK VLM mode")
-
-            # Start fallback pipeline
-            self._fallback.set_result_callback(
-                lambda result: self._handle_vision_result(result, session_id)
-            )
-            await self._fallback.start()
+            print("[VISION] Holoscan unavailable — FALLBACK VLM mode")
 
         # Register frame handlers on all cameras
         for cam_id in [CameraId.CAM1_MONITOR.value, CameraId.CAM2_SENTINEL.value, CameraId.CAM3_SURGEON.value]:
@@ -117,23 +120,36 @@ class VisionOrchestrator:
     async def _on_frame(self, frame: CameraFrame):
         """Handle incoming frame from any camera."""
         if self._mode == PipelineMode.HOLOSCAN_LIVE:
-            # Forward to Holoscan via internal bus
             await self._forward_to_holoscan(frame)
-        elif self._mode == PipelineMode.FALLBACK_VLM:
-            # Buffer for periodic VLM analysis
-            self._fallback.buffer_frame(frame)
         elif self._mode == PipelineMode.HYBRID:
-            # Cam3 to Holoscan, others to fallback
             if frame.camera_id == CameraId.CAM3_SURGEON.value and self._holoscan_available:
                 await self._forward_to_holoscan(frame)
-            else:
-                self._fallback.buffer_frame(frame)
+
+        # Always buffer for periodic VLM confirmation / monitors without blocking Holoscan.
+        self._fallback.buffer_frame(frame)
 
     async def _forward_to_holoscan(self, frame: CameraFrame):
-        """Forward frame to Holoscan runtime."""
-        # TODO: Implement when Holoscan container is running
-        # This will send frames via shared memory or gRPC to the Holoscan graph
-        pass
+        """Forward encoded frame to holoscan-bridge HTTP ingress."""
+        base = (settings.holoscan_base_url or settings.gpu_backend_url or "").strip()
+        if not base:
+            return
+
+        payload = {
+            "session_id": self._active_session_id or "",
+            "camera_id": frame.camera_id,
+            "image_b64": base64.b64encode(frame.data).decode("ascii"),
+            "mime_type": frame.mime_type or "image/jpeg",
+        }
+
+        try:
+            import httpx
+
+            async with httpx.AsyncClient(timeout=5.0) as client:
+                resp = await client.post(f"{base.rstrip('/')}/v1/ingest_frame", json=payload)
+                if resp.status_code >= 400:
+                    print(f"[VISION] holoscan ingest HTTP {resp.status_code}: {resp.text[:200]}")
+        except Exception as exc:
+            print(f"[VISION] holoscan forward error: {exc}")
 
     async def _handle_vision_result(self, result: VisionResult, session_id: str):
         """Convert VisionResult to AgentEvents and dispatch."""
@@ -255,14 +271,12 @@ class VisionOrchestrator:
             # Holoscan came back online
             if not was_available and self._holoscan_available:
                 self._mode = PipelineMode.HOLOSCAN_LIVE
-                await self._fallback.stop()
                 print("[VISION] Holoscan recovered -- switching to LIVE mode")
 
-            # Holoscan went down
+            # Holoscan went down — keep fallback loops running (already started)
             elif was_available and not self._holoscan_available:
                 self._mode = PipelineMode.FALLBACK_VLM
-                await self._fallback.start()
-                print("[VISION] Holoscan failed -- switching to FALLBACK VLM mode")
+                print("[VISION] Holoscan failed -- FALLBACK VLM mode")
 
     def get_health(self) -> dict:
         fallback_stats = self._fallback.get_stats()
