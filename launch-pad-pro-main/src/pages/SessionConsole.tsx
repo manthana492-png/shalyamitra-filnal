@@ -287,6 +287,11 @@ const SessionConsole = () => {
     }
   };
 
+  const timelineEvents = useMemo(
+    () => director.alertQueue.map((a) => ({ at: a.at, pillar: a.pillar, label: a.title })),
+    [director.alertQueue],
+  );
+
   if (loading || !session) {
     return (
       <div className="flex min-h-screen items-center justify-center">
@@ -322,10 +327,6 @@ const SessionConsole = () => {
   const isKnowledgeOpen = director.layoutState === "knowledge_display";
   const isPK = director.layoutState === "pharmacokinetics";
   const isVitalAlert = director.layoutState === "vital_alert";
-  const timelineEvents = useMemo(
-    () => director.alertQueue.map((a) => ({ at: a.at, pillar: a.pillar, label: a.title })),
-    [director.alertQueue],
-  );
 
   return (
     <div className={`min-h-screen bg-background hud-scanline ${viewportAlert}`}>
