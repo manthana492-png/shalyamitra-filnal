@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { Link } from "react-router-dom";
 import { supabase } from "@/integrations/supabase/client";
+import { DEV_AUTH_BYPASS, listSessions } from "@/lib/backend-client";
 import { AppShell } from "@/components/AppShell";
 import { CdsBanner } from "@/components/CdsBanner";
 import { Badge } from "@/components/ui/badge";
@@ -25,12 +26,26 @@ const Sessions = () => {
   useEffect(() => {
     let alive = true;
     (async () => {
-      const { data } = await supabase
-        .from("sessions")
-        .select("id, procedure_name, patient_code, status, current_mode, created_at, surgeon_name, theatre")
-        .order("created_at", { ascending: false });
+      let data: Row[] = [];
+      if (DEV_AUTH_BYPASS) {
+        try {
+          const rows = await listSessions();
+          data = (rows as Row[]).map((r) => ({
+            ...r,
+            status: r.status === "active" ? "in_progress" : r.status,
+          }));
+        } catch {
+          data = [];
+        }
+      } else {
+        const result = await supabase
+          .from("sessions")
+          .select("id, procedure_name, patient_code, status, current_mode, created_at, surgeon_name, theatre")
+          .order("created_at", { ascending: false });
+        data = (result.data ?? []) as Row[];
+      }
       if (alive) {
-        setRows((data ?? []) as Row[]);
+        setRows(data);
         setLoading(false);
       }
     })();

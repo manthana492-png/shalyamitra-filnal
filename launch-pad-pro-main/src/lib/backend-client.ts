@@ -13,6 +13,8 @@
 // Backend base URL — defaults to localhost in dev
 const BACKEND_URL = import.meta.env.VITE_BACKEND_URL || "http://localhost:8000";
 const WS_URL = BACKEND_URL.replace(/^http/, "ws");
+export const DEV_AUTH_BYPASS =
+  String(import.meta.env.VITE_DEV_AUTH_BYPASS || "false").toLowerCase() === "true";
 
 // ─── REST API Helpers ────────────────────────────────────
 
@@ -54,6 +56,16 @@ export const getPostopReport = (sessionId: string) =>
 /** Sessions CRUD */
 export const listSessions = () => api("/api/sessions/");
 export const getSession = (id: string) => api(`/api/sessions/${id}`);
+export const createSession = (payload: Record<string, unknown>) =>
+  api<{ id: string }>("/api/sessions/", {
+    method: "POST",
+    body: JSON.stringify(payload),
+  });
+export const updateSession = (id: string, payload: Record<string, unknown>) =>
+  api(`/api/sessions/${id}`, {
+    method: "PATCH",
+    body: JSON.stringify(payload),
+  });
 
 /** Voice profiles */
 export const getVoiceProfiles = () =>

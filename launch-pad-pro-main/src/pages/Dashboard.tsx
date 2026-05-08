@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { Link } from "react-router-dom";
 import { useAuth } from "@/contexts/AuthContext";
 import { supabase } from "@/integrations/supabase/client";
+import { DEV_AUTH_BYPASS, listSessions } from "@/lib/backend-client";
 import { AppShell } from "@/components/AppShell";
 import { CdsBanner } from "@/components/CdsBanner";
 import { Button } from "@/components/ui/button";
@@ -31,13 +32,29 @@ const Dashboard = () => {
   useEffect(() => {
     let alive = true;
     (async () => {
-      const { data } = await supabase
-        .from("sessions")
-        .select("id, procedure_name, patient_code, status, current_mode, created_at, started_at, ended_at")
-        .order("created_at", { ascending: false })
-        .limit(8);
+      let data: SessionRow[] = [];
+      if (DEV_AUTH_BYPASS) {
+        try {
+          const rows = await listSessions();
+          data = (rows as SessionRow[])
+            .map((r) => ({
+              ...r,
+              status: r.status === "active" ? "in_progress" : r.status,
+            }))
+            .slice(0, 8);
+        } catch {
+          data = [];
+        }
+      } else {
+        const result = await supabase
+          .from("sessions")
+          .select("id, procedure_name, patient_code, status, current_mode, created_at, started_at, ended_at")
+          .order("created_at", { ascending: false })
+          .limit(8);
+        data = (result.data ?? []) as SessionRow[];
+      }
       if (alive) {
-        setSessions((data ?? []) as SessionRow[]);
+        setSessions(data);
         setLoading(false);
       }
     })();

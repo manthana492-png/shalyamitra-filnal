@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState, useCallback, useRef } from "react";
 import { useParams, useNavigate, Link } from "react-router-dom";
 import { supabase } from "@/integrations/supabase/client";
+import { DEV_AUTH_BYPASS, getSession, updateSession } from "@/lib/backend-client";
 import { type StreamMode } from "@/lib/nael-stream";
 import { useRealtimeStream } from "@/lib/realtime-stream";
 import { useVoiceControl } from "@/hooks/useVoiceControl";
@@ -93,10 +94,26 @@ const SessionConsole = () => {
   useEffect(() => {
     if (!id) return;
     (async () => {
-      const { data, error } = await supabase
-        .from("sessions")
-        .select("id, procedure_name, patient_code, status, current_mode, started_at, ended_at, surgeon_name, theatre")
-        .eq("id", id).maybeSingle();
+      let data: SessionRow | null = null;
+      let error: { message?: string } | null = null;
+      if (DEV_AUTH_BYPASS) {
+        try {
+          const row = await getSession(id);
+          data = {
+            ...(row as SessionRow),
+            status: (row as SessionRow).status === "active" ? "in_progress" : (row as SessionRow).status,
+          };
+        } catch (e) {
+          error = { message: e instanceof Error ? e.message : String(e) };
+        }
+      } else {
+        const result = await supabase
+          .from("sessions")
+          .select("id, procedure_name, patient_code, status, current_mode, started_at, ended_at, surgeon_name, theatre")
+          .eq("id", id).maybeSingle();
+        data = (result.data as SessionRow | null) ?? null;
+        error = result.error;
+      }
       if (error || !data) {
         toast({ title: "Session not found", variant: "destructive" });
         navigate("/sessions", { replace: true });
@@ -131,7 +148,7 @@ const SessionConsole = () => {
       director.pushAlert(alert);
       // Audio alert (spec: every visual alert has audio)
       playAlertTone(e.severity as "critical" | "warning" | "caution" | "info");
-      if (id) {
+      if (!DEV_AUTH_BYPASS && id) {
         supabase.from("alerts").insert({
           session_id: id, severity: e.severity, title: e.title, body: e.body, source: e.source,
         });
@@ -197,7 +214,7 @@ const SessionConsole = () => {
   // Persist transcript lines
   const persistedCount = useMemo(() => ({ n: 0 }), []);
   useEffect(() => {
-    if (!id) return;
+    if (!id || DEV_AUTH_BYPASS) return;
     if (lines.length <= persistedCount.n) return;
     const newOnes = lines.slice(persistedCount.n);
     persistedCount.n = lines.length;
@@ -212,10 +229,18 @@ const SessionConsole = () => {
     if (!voiceCtl.active && voiceCtl.supported) voiceCtl.start();
     setMicActive(true);
     if (session.status === "scheduled") {
-      await supabase.from("sessions").update({
-        status: "in_progress",
-        started_at: new Date().toISOString(),
-      }).eq("id", session.id);
+      const startedAt = new Date().toISOString();
+      if (DEV_AUTH_BYPASS) {
+        await updateSession(session.id, {
+          status: "active",
+          started_at: startedAt,
+        });
+      } else {
+        await supabase.from("sessions").update({
+          status: "in_progress",
+          started_at: startedAt,
+        }).eq("id", session.id);
+      }
       setSession({ ...session, status: "in_progress", started_at: new Date().toISOString() });
       logAudit({ action: "session.start", sessionId: session.id });
     }
@@ -227,10 +252,18 @@ const SessionConsole = () => {
     if (!session) return;
     setRunning(false);
     voiceCtl.stop();
-    await supabase.from("sessions").update({
-      status: "completed",
-      ended_at: new Date().toISOString(),
-    }).eq("id", session.id);
+    const endedAt = new Date().toISOString();
+    if (DEV_AUTH_BYPASS) {
+      await updateSession(session.id, {
+        status: "completed",
+        ended_at: endedAt,
+      });
+    } else {
+      await supabase.from("sessions").update({
+        status: "completed",
+        ended_at: endedAt,
+      }).eq("id", session.id);
+    }
     logAudit({ action: "session.end", sessionId: session.id, details: { lines: lines.length, alerts: director.alertQueue.length } });
     // Show session summary before navigating to PostOp
     setSessionEnded(true);
@@ -245,7 +278,11 @@ const SessionConsole = () => {
   const handleModeChange = async (m: StreamMode) => {
     setMode(m);
     if (session) {
-      await supabase.from("sessions").update({ current_mode: m }).eq("id", session.id);
+      if (DEV_AUTH_BYPASS) {
+        await updateSession(session.id, { current_mode: m });
+      } else {
+        await supabase.from("sessions").update({ current_mode: m }).eq("id", session.id);
+      }
       logAudit({ action: "mode.change", sessionId: session.id, details: { to: m } });
     }
   };

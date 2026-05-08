@@ -13,6 +13,7 @@ import { z } from "zod";
 import { useAuth } from "@/contexts/AuthContext";
 import { supabase } from "@/integrations/supabase/client";
 import { logAudit } from "@/lib/audit";
+import { createSession, DEV_AUTH_BYPASS } from "@/lib/backend-client";
 import { CDS_DISCLAIMER_FULL } from "@/lib/cds";
 import { AppShell } from "@/components/AppShell";
 import { CdsBanner } from "@/components/CdsBanner";
@@ -91,24 +92,47 @@ const NewSession = () => {
   const onSubmit = async (v: FormValues) => {
     if (!user) return;
     setSubmitting(true);
-    const { data, error } = await supabase
-      .from("sessions")
-      .insert({
-        created_by: user.id,
-        procedure_name: v.procedure_name,
-        procedure_category: v.procedure_category ?? null,
-        patient_code: v.patient_code,
-        surgeon_name: v.surgeon_name ?? null,
-        anaesthetist_name: v.anaesthetist_name ?? null,
-        theatre: v.theatre ?? null,
-        notes: v.notes ?? null,
-        status: "scheduled",
-        current_mode: "reactive",
-        disclaimer_accepted: true,
-        disclaimer_accepted_at: new Date().toISOString(),
-      })
-      .select("id")
-      .single();
+    let data: { id: string } | null = null;
+    let error: { message?: string } | null = null;
+    if (DEV_AUTH_BYPASS) {
+      try {
+        data = await createSession({
+          procedure_name: v.procedure_name,
+          procedure_category: v.procedure_category ?? null,
+          patient_code: v.patient_code,
+          surgeon_name: v.surgeon_name ?? null,
+          anaesthetist_name: v.anaesthetist_name ?? null,
+          theatre: v.theatre ?? null,
+          notes: v.notes ?? null,
+          current_mode: "reactive",
+          disclaimer_accepted: true,
+          disclaimer_accepted_at: new Date().toISOString(),
+        });
+      } catch (e) {
+        error = { message: e instanceof Error ? e.message : String(e) };
+      }
+    } else {
+      const result = await supabase
+        .from("sessions")
+        .insert({
+          created_by: user.id,
+          procedure_name: v.procedure_name,
+          procedure_category: v.procedure_category ?? null,
+          patient_code: v.patient_code,
+          surgeon_name: v.surgeon_name ?? null,
+          anaesthetist_name: v.anaesthetist_name ?? null,
+          theatre: v.theatre ?? null,
+          notes: v.notes ?? null,
+          status: "scheduled",
+          current_mode: "reactive",
+          disclaimer_accepted: true,
+          disclaimer_accepted_at: new Date().toISOString(),
+        })
+        .select("id")
+        .single();
+      data = (result.data as { id: string } | null) ?? null;
+      error = result.error;
+    }
     setSubmitting(false);
     if (error || !data) {
       toast({ title: "Could not create session", description: error?.message, variant: "destructive" });

@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { useParams, Link } from "react-router-dom";
 import { supabase } from "@/integrations/supabase/client";
+import { DEV_AUTH_BYPASS, getSession } from "@/lib/backend-client";
 import { AppShell } from "@/components/AppShell";
 import { CdsBanner } from "@/components/CdsBanner";
 import { Button } from "@/components/ui/button";
@@ -30,14 +31,27 @@ const PostOp = () => {
   useEffect(() => {
     if (!id) return;
     (async () => {
-      const [{ data: s }, { data: t }, { data: a }] = await Promise.all([
-        supabase.from("sessions").select("*").eq("id", id).maybeSingle(),
-        supabase.from("transcripts").select("*").eq("session_id", id).order("spoken_at"),
-        supabase.from("alerts").select("*").eq("session_id", id).order("created_at"),
-      ]);
-      setSession(s as Session);
-      setTranscripts((t ?? []) as Transcript[]);
-      setAlerts((a ?? []) as Alert[]);
+      if (DEV_AUTH_BYPASS) {
+        try {
+          const s = await getSession(id);
+          setSession((s ?? null) as Session | null);
+          setTranscripts([]);
+          setAlerts([]);
+        } catch {
+          setSession(null);
+          setTranscripts([]);
+          setAlerts([]);
+        }
+      } else {
+        const [{ data: s }, { data: t }, { data: a }] = await Promise.all([
+          supabase.from("sessions").select("*").eq("id", id).maybeSingle(),
+          supabase.from("transcripts").select("*").eq("session_id", id).order("spoken_at"),
+          supabase.from("alerts").select("*").eq("session_id", id).order("created_at"),
+        ]);
+        setSession(s as Session);
+        setTranscripts((t ?? []) as Transcript[]);
+        setAlerts((a ?? []) as Alert[]);
+      }
       setLoading(false);
     })();
   }, [id]);

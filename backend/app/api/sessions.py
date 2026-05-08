@@ -29,7 +29,7 @@ _sessions: dict[str, dict] = {}
 
 
 def _ensure_demo_sessions_enabled() -> None:
-    if not settings.demo_mode:
+    if not (settings.demo_mode or settings.dev_auth_bypass):
         raise HTTPException(
             status_code=503,
             detail=(
