@@ -179,6 +179,24 @@ class PrivacyRouter:
                     settings.openrouter_base_url,
                     settings.openrouter_api_key)
 
+    def _provider_pref(self) -> str:
+        return (settings.llm_provider or "auto").strip().lower()
+
+    def _can_use_nvidia(self) -> bool:
+        pref = self._provider_pref()
+        if pref == "openrouter":
+            return False
+        return bool(settings.nvidia_api_key)
+
+    def _openrouter_model_for_tier(self, tier: str) -> str:
+        if tier == "thinking":
+            return settings.openrouter_thinking_model
+        if tier == "fast":
+            return settings.openrouter_fast_model
+        if tier == "vision":
+            return settings.openrouter_vision_model
+        return settings.openrouter_primary_model
+
     def _select_tier(self, agent_type: str) -> str:
         """Select the best model tier for this agent."""
         if self._force_tier:
@@ -245,8 +263,8 @@ class PrivacyRouter:
         if enable_thinking and tier in ("primary", "thinking"):
             safe_messages = [{"role": "system", "content": "detailed thinking on"}] + safe_messages
 
-        # STEP 3: Try NIM API (preferred)
-        if settings.nvidia_api_key:
+        # STEP 3: Try NVIDIA NIM API first (unless provider is pinned to openrouter)
+        if self._can_use_nvidia():
             model, base_url, api_key = self._get_tier_config(tier)
             response = await self._call_api(base_url, api_key, model,
                                             safe_messages, max_tokens, temperature,
@@ -283,9 +301,10 @@ class PrivacyRouter:
                                        phi_detected, True, phi_categories, latency)
                     return response
 
-        # STEP 4: Final fallback — OpenRouter
+        # STEP 4: OpenRouter (tier-aware cloud route)
         if settings.openrouter_api_key:
-            or_model, or_url, or_key = self._get_tier_config("openrouter")
+            or_model = self._openrouter_model_for_tier(tier)
+            or_url, or_key = settings.openrouter_base_url, settings.openrouter_api_key
             response = await self._call_api(or_url, or_key, or_model,
                                             safe_messages, max_tokens, temperature,
                                             is_nim=False)
@@ -377,10 +396,21 @@ class PrivacyRouter:
     def route(self, text: str, agent_type: str = "unknown") -> RoutingDecision:
         """Lightweight routing decision (for audit/display, not execution)."""
         tier = self._select_tier(agent_type)
-        model, base_url, _ = self._get_tier_config(tier)
+        if self._can_use_nvidia():
+            model, base_url, _ = self._get_tier_config(tier)
+            route_tier = (
+                InferenceTier.NIM_PRIMARY if tier == "primary" else
+                InferenceTier.NIM_THINKING if tier == "thinking" else
+                InferenceTier.NIM_FAST if tier == "fast" else
+                InferenceTier.NIM_VISION
+            )
+        else:
+            model = self._openrouter_model_for_tier(tier)
+            base_url = settings.openrouter_base_url
+            route_tier = InferenceTier.OPENROUTER
         phi_result = self._phi_engine.redact(text)
         return RoutingDecision(
-            tier=InferenceTier.NIM_PRIMARY if tier == "primary" else InferenceTier.NIM_THINKING,
+            tier=route_tier,
             reason=RouteReason.PRIMARY,
             model=model, endpoint=base_url,
             phi_detected=phi_result.phi_detected,
@@ -423,10 +453,23 @@ class PrivacyRouter:
             "nvidia_nim_configured": bool(settings.nvidia_api_key),
             "openrouter_configured": bool(settings.openrouter_api_key),
             "models": {
-                "primary": settings.nim_reasoning_model,
-                "thinking": settings.nim_thinking_model,
-                "fast": settings.nim_fast_model,
-                "vision": settings.nim_vision_model,
+                "provider": self._provider_pref(),
+                "primary": (
+                    settings.nim_reasoning_model if self._can_use_nvidia()
+                    else settings.openrouter_primary_model
+                ),
+                "thinking": (
+                    settings.nim_thinking_model if self._can_use_nvidia()
+                    else settings.openrouter_thinking_model
+                ),
+                "fast": (
+                    settings.nim_fast_model if self._can_use_nvidia()
+                    else settings.openrouter_fast_model
+                ),
+                "vision": (
+                    settings.nim_vision_model if self._can_use_nvidia()
+                    else settings.openrouter_vision_model
+                ),
                 "safety": settings.nim_safety_model,
             },
         }

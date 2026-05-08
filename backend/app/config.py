@@ -87,6 +87,13 @@ class Settings(BaseSettings):
     # ── OpenRouter (fallback / Scholar / Consultant) ──────
     openrouter_api_key: str = ""
     openrouter_base_url: str = "https://openrouter.ai/api/v1"
+    # LLM provider strategy: auto | nvidia | openrouter
+    llm_provider: str = "auto"
+    # Tiered OpenRouter model routing (used when llm_provider=openrouter or NVIDIA key missing)
+    openrouter_primary_model: str = "google/gemini-2.0-flash-001"
+    openrouter_thinking_model: str = "moonshotai/kimi-k2.5"
+    openrouter_fast_model: str = "google/gemini-2.0-flash-001"
+    openrouter_vision_model: str = "google/gemini-2.0-flash-001"
     scholar_model: str = "anthropic/claude-sonnet-4"
     consultant_model: str = "openai/gpt-4.1"
     chronicler_model: str = "anthropic/claude-sonnet-4"
